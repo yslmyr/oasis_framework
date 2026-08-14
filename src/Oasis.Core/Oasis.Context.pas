@@ -61,7 +61,10 @@ type
     procedure Dispose;
     { Tear down all plugin side-effects (effects + event listeners) and re-run
       every mounted plugin's Apply. Services are overwritten on re-register. }
-    procedure Reload;
+    procedure Reload; overload;
+    { Tear down ONE plugin's side-effects and re-run its Apply. Returns False if
+      no mounted plugin has that name. }
+    function  Reload(const AName: string): Boolean; overload;
   end;
 
   TEventBusFactory = reference to function(AOwner: IEffectScope;
@@ -70,6 +73,7 @@ type
   TContext = class(TInterfacedObject, IContext)
   strict private type
     TPluginEntry = record
+      Name: string;
       Apply: TProc<IContext>;
       Returned: TFunc<IContext, TDisposer>;
       Fiber: IEffectScope;
@@ -84,7 +88,7 @@ type
     FChildren: TList<IContext>;
     FActiveFiber: IEffectScope;
     FDisposed: Boolean;
-    procedure MountUnderFreshFiber(AApply: TProc<IContext>;
+    procedure MountUnderFreshFiber(const AName: string; AApply: TProc<IContext>;
                                    AReturned: TFunc<IContext, TDisposer>);
     function  CreateEventBus(AParent: IEventBus): IEventBus;
   public
@@ -104,7 +108,8 @@ type
     procedure Plugin(const AName: string; AFn: TFunc<IContext, TDisposer>); overload;
     function  Fork(const AName: string = ''): IContext;
     procedure Dispose;
-    procedure Reload;
+    procedure Reload; overload;
+    function  Reload(const AName: string): Boolean; overload;
   end;
 
 implementation
@@ -201,8 +206,8 @@ begin
   Effects.Add(AEffect);
 end;
 
-procedure TContext.MountUnderFreshFiber(AApply: TProc<IContext>;
-  AReturned: TFunc<IContext, TDisposer>);
+procedure TContext.MountUnderFreshFiber(const AName: string;
+  AApply: TProc<IContext>; AReturned: TFunc<IContext, TDisposer>);
 var
   LFiber: IEffectScope;
   LPrev: IEffectScope;
@@ -212,6 +217,10 @@ begin
   LFiber := TEffectScope.Create;
   LPrev := FActiveFiber;        // save (nested mounts restore it)
   FActiveFiber := LFiber;
+  { While Apply runs, the event bus's owner is this fiber: listeners the plugin
+    registers are auto-unsubscribed when the fiber is disposed (per-plugin
+    unload/reload) instead of waiting for context teardown. }
+  FEvents.SetOwnerScope(LFiber);
   try
     try
       if Assigned(AApply) then
@@ -234,19 +243,20 @@ begin
     end;
   finally
     FActiveFiber := LPrev;
+    FEvents.SetOwnerScope(Effects);  // back to the enclosing active scope
   end;
+  LEntry.Name := AName;
   LEntry.Apply := AApply;
   LEntry.Returned := AReturned;
   LEntry.Fiber := LFiber;
   FPlugins.Add(LEntry);
 end;
-
 procedure TContext.Plugin(APlugin: IPlugin);
 var
   LPlugin: IPlugin;
 begin
   LPlugin := APlugin;
-  MountUnderFreshFiber(
+  MountUnderFreshFiber(APlugin.PluginName,
     procedure(C: IContext)
     begin
       { Keep the plugin alive for the lifetime of its fiber: its cleanups may
@@ -262,7 +272,7 @@ var
   LFn: TProc<IContext>;
 begin
   LFn := AFn;
-  MountUnderFreshFiber(procedure(C: IContext) begin LFn(C); end, nil);
+  MountUnderFreshFiber(AName, procedure(C: IContext) begin LFn(C); end, nil);
 end;
 
 procedure TContext.Plugin(const AName: string; AFn: TFunc<IContext, TDisposer>);
@@ -270,7 +280,7 @@ var
   LFn: TFunc<IContext, TDisposer>;
 begin
   LFn := AFn;
-  MountUnderFreshFiber(nil, LFn);
+  MountUnderFreshFiber(AName, nil, LFn);
 end;
 
 function TContext.Fork(const AName: string): IContext;
@@ -383,13 +393,39 @@ begin
     for I := 0 to LSnap.Count - 1 do
     begin
       LEntry := LSnap[I];
-      MountUnderFreshFiber(LEntry.Apply, LEntry.Returned);
+      MountUnderFreshFiber(LEntry.Name, LEntry.Apply, LEntry.Returned);
     end;
     if LFailed then
       raise EOasisDisposeError.Create(LMsgs);
   finally
     LSnap.Free;
   end;
+end;
+
+function TContext.Reload(const AName: string): Boolean;
+var
+  I: Integer;
+  LEntry: TPluginEntry;
+begin
+  Result := False;
+  if FDisposed then
+    Exit;
+  for I := 0 to FPlugins.Count - 1 do
+    if SameText(FPlugins[I].Name, AName) then
+    begin
+      LEntry := FPlugins[I];
+      FPlugins.Delete(I);
+      { Dispose removes this plugin's effects AND its event listeners (they are
+        fiber-owned since Apply ran with the bus owner set to the fiber). A
+        cleanup raising does not stop the remount (fault isolation). }
+      try
+        LEntry.Fiber.Dispose;
+      except
+        on EOasisDisposeError do ;
+      end;
+      MountUnderFreshFiber(LEntry.Name, LEntry.Apply, LEntry.Returned);
+      Exit(True);
+    end;
 end;
 
 end.

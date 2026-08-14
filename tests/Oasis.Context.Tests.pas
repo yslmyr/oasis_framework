@@ -36,6 +36,12 @@ type
 
     [Test]
     procedure Reload_Re_Runs_And_Tears_Down_Effects_And_Listeners;
+
+    [Test]
+    procedure Reload_By_Name_Re_Runs_Only_That_Plugin;
+
+    [Test]
+    procedure Reload_By_Name_Unknown_Returns_False;
   end;
 
 implementation
@@ -238,6 +244,52 @@ begin
   Assert.AreEqual(1, LTeardown);   // old effect cleaned up between runs
   Ctx.Events.Emit('ping', []);
   Assert.AreEqual(2, LHeard);      // old listener removed (not duplicated)
+  Ctx.Dispose;
+end;
+
+procedure TContextTests.Reload_By_Name_Re_Runs_Only_That_Plugin;
+var
+  Ctx: IContext;
+  LTargetApply, LOtherApply, LTargetHeard, LOtherHeard: Integer;
+begin
+  LTargetApply := 0;
+  LOtherApply := 0;
+  LTargetHeard := 0;
+  LOtherHeard := 0;
+  Ctx := TContext.Create('root');
+  Ctx.Plugin('target',
+    procedure(C: IContext)
+    begin
+      Inc(LTargetApply);
+      C.Events.On('ping', procedure(const A: array of const) begin Inc(LTargetHeard); end);
+    end);
+  Ctx.Plugin('other',
+    procedure(C: IContext)
+    begin
+      Inc(LOtherApply);
+      C.Events.On('ping', procedure(const A: array of const) begin Inc(LOtherHeard); end);
+    end);
+  Ctx.Events.Emit('ping', []);
+  Assert.AreEqual(1, LTargetApply);
+  Assert.AreEqual(1, LOtherApply);
+  Assert.AreEqual(1, LTargetHeard);
+  Assert.AreEqual(1, LOtherHeard);
+
+  Assert.IsTrue(Ctx.Reload('target'));
+  Assert.AreEqual(2, LTargetApply);   // only target re-applied
+  Assert.AreEqual(1, LOtherApply);    // other untouched
+  Ctx.Events.Emit('ping', []);
+  Assert.AreEqual(2, LTargetHeard);   // target listener reset, not duplicated
+  Assert.AreEqual(2, LOtherHeard);    // other listener still attached
+  Ctx.Dispose;
+end;
+
+procedure TContextTests.Reload_By_Name_Unknown_Returns_False;
+var
+  Ctx: IContext;
+begin
+  Ctx := TContext.Create('root');
+  Assert.IsFalse(Ctx.Reload('no-such-plugin'));
   Ctx.Dispose;
 end;
 
