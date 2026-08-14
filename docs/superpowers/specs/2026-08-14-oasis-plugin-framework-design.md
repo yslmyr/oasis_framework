@@ -537,3 +537,19 @@ MVP = `Oasis.Core` + `Oasis.Hosting`（`TInProcPluginLoader` + `THost`）。全�
 | `Supports(Ctx.Events, IAsyncEventBus)` | `TContext` 增加类级可插拔 `TEventBusFactory`（默认 nil → `TEventBus`，Core 零依赖不变）；`OasisRegisterAsyncEventBus` 安装 `TAsyncEventBus` 为默认 | Core 不能引用 OTL；用工厂钩子让上层（应用）在启动期一次性安装。安装后新建的 `TContext`（含 `Fork`）的事件总线即 `IAsyncEventBus`。 |
 
 故障隔离与生命周期沿用同步总线：每个监听器在 future 内 try/except，异常以错误消息返回，Parallel 汇总后抛 `EOasisEventError`；`OnAsync` 用 token 自动退订，注册产生 bus↔owner-scope 引用环，由 `Dispose` 断开。验证：`tests/otl/Oasis.Otl.Tests.dpr` 6/6（含上下文集成）；`demos/OtlDemo` 5 监听器跑在 5 个不同工作线程，证明真实并发。
+
+---
+
+## 14. 三期实现笔记（Phase 3 — `Oasis.Bpl`，已实现）
+
+三期按 §6.4 落地 `TBplPluginLoader`（同一 `IPluginLoader` 契约，`Kind='bpl'`，`Host.Mount('bpl:<path>')` 路由），上层 Host/Context 零改动。遇 Delphi/BPL 现实做了如下细化：
+
+| §6.4 契约 / 设想 | 实际实现 | 原因 |
+|---|---|---|
+| BPL 用 `exports` 导出 `OasisCreatePlugin` | 改为 **`RegisterClassAlias` + `FindClass`** 工厂对象 | Delphi **包不支持 `exports` 子句**（编译报 E2029）。改用：插件包在 `initialization` 节用 `RegisterClassAlias(TMyFactory, OASIS_BPL_FACTORY_CLASS)` 注册一个 `TOasisPluginFactory`（`TInterfacedPersistent`——既被 `RegisterClass` 接受、又被接口引用计数管理）；宿主 `LoadPackage` 后 `FindClass(...)` 取到、用 `Supports(.., IOasisPluginFactory)` 拿到工厂接口。这依赖**宿主与 BPL 共享 `rtl.bpl` 的全局类表**——所以宿主 EXE 必须用 `-LUrtl` 编译。 |
+| 接口跨边界 | 宿主与 BPL **各自静态含一份 `Oasis.Context`**，但 `IPlugin`/`IContext` 按 GUID + vtable 派发（同源编译→vtable 布局一致），跨边界安全。 | 避免把 Oasis.Core 也做成运行期包（部署更重）。 |
+| `Unload` 释放模块 | `TBplPluginLoader.Destroy` **不调用 `UnloadPackage`**（仅释放工厂闭包）；BPL 随进程退出回收。`Unload(factory)` 保留给显式卸载。 | 运行期 `UnloadPackage` 很脆弱：插件/工厂对象的析构仍引用 BPL 代码，卸载顺序不当会触发访问冲突（实测 runtime error 216）。进程退出回收是安全默认。 |
+
+**宿主构建要求**：`dcc32 -LUrtl`（共享 rtl.bpl），运行期 `rtl.bpl` 须在 PATH。一个副作用：`-LUrtl` 下控制台 stdout 可能被静默丢弃，故 `BplDemo` 同时把结果写入 `bpldemo_out.txt`。
+
+**验证**：`samples/BplPlugin/SamplePlugin.bpl`（注册 `IGreeting` 服务）；`demos/BplDemo` 加载它并解析服务 → `bpldemo_out.txt` 输出 `Hello from BPL, world` / `Pending: 0  Failed: 0`，进程退出码 0、无访问冲突。

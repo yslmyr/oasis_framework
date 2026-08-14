@@ -22,8 +22,8 @@ Oasis brings Cordis's core design ideas to Delphi:
 - **Dependency activation** — a plugin declares the service GUIDs it needs
   (`Inject`); it activates as soon as they are resolvable. Mount order does not
   matter — the host rescans the pending queue on every service registration.
-- **Loaders** — pluggable `IPluginLoader` abstraction (in-process first; BPL in
-  phase 3).
+- **Loaders** — pluggable `IPluginLoader` abstraction: in-process (`TInProcPluginLoader`)
+  and dynamic BPL (`TBplPluginLoader`, phase 3) with the same contract.
 
 ## Status
 
@@ -31,7 +31,7 @@ Oasis brings Cordis's core design ideas to Delphi:
 |---|---|---|
 | MVP | `Oasis.Core` + `Oasis.Hosting` (in-process loader + `THost`) | **Done** — 25/25 tests, demo runs |
 | Phase 2 | `Oasis.Otl` — async `Parallel`/`SerialAsync` via OTL | **Done** — 6/6 tests, async demo runs |
-| Phase 3 | `Oasis.Bpl` — dynamic BPL loading | Planned |
+| Phase 3 | `Oasis.Bpl` — dynamic BPL loading | **Done** — sample BPL loads, demo runs |
 | Future | `Context.Reload` hot-reload | Evaluated |
 
 ## Requirements
@@ -48,10 +48,13 @@ src/
   Oasis.Hosting/   IPluginLoader + TInProcPluginLoader, THost
   Oasis.Otl/       (phase 2) IAsyncEventBus + TAsyncEventBus — Parallel/SerialAsync
                    via OmniThreadLibrary; inherits TEventBus
+  Oasis.Bpl/       (phase 3) TBplPluginLoader + IOasisPluginFactory contract
+samples/BplPlugin/ (phase 3) a sample BPL plugin (.dpk/.pas) + shared contract
 tests/             DUnitX unit tests (Oasis.Tests.dpr — Core/Hosting, OTL-free)
 tests/otl/         OTL test runner (Oasis.Otl.Tests.dpr — needs OmniThreadLibrary)
 demos/ConsoleDemo/ 3-plugin dependency chain + lifecycle event (OTL-free)
 demos/OtlDemo/     async Parallel demo (needs OmniThreadLibrary)
+demos/BplDemo/     dynamic BPL-loading demo (needs rtl.bpl on PATH; writes bpldemo_out.txt)
 docs/superpowers/  design spec + implementation plan
 ```
 
@@ -81,6 +84,21 @@ Oasis.Otl.Tests.exe        # expect: Tests Passed: 6
 # async demo — from demos/OtlDemo/
 dcc32 -B -NSWinapi;System;System.Win;Vcl -U"<OTL>" -U"<OTL>\src" OasisOtlDemo.dpr
 OasisOtlDemo.exe           # expect: 5 listeners across 5 distinct worker threads
+```
+
+**Phase 3 (BPL plugin, dynamic loading)** — build the sample BPL, then the host
+(the host must use the RTL runtime package so it shares `rtl.bpl`'s class list
+with the BPL; `rtl.bpl` must be on PATH at run time):
+
+```bash
+# sample BPL — from samples/BplPlugin/
+dcc32 -B -NSWinapi;System;System.Win;Vcl;System.Classes \
+  -U"<repo>/src/Oasis.Core" -U"<repo>/src/Oasis.Bpl" -U. SamplePlugin.dpk
+# -> SamplePlugin.bpl
+
+# host — from demos/BplDemo/  (note -LUrtl)
+dcc32 -B -NSWinapi;System;System.Win;Vcl;System.Classes -LUrtl BplDemo.dpr
+BplDemo.exe                # writes bpldemo_out.txt: "Hello from BPL, world" / 0/0
 ```
 
 ## A plugin in 30 seconds
