@@ -11,8 +11,10 @@ uses
   Oasis.Errors in '..\src\Oasis.Core\Oasis.Errors.pas',
   Oasis.Effects in '..\src\Oasis.Core\Oasis.Effects.pas',
   Oasis.Services in '..\src\Oasis.Core\Oasis.Services.pas',
+  Oasis.Events in '..\src\Oasis.Core\Oasis.Events.pas',
   Oasis.Effects.Tests in 'Oasis.Effects.Tests.pas',
-  Oasis.Services.Tests in 'Oasis.Services.Tests.pas';
+  Oasis.Services.Tests in 'Oasis.Services.Tests.pas',
+  Oasis.Events.Tests in 'Oasis.Events.Tests.pas';
 
 var
   LRunner: ITestRunner;
