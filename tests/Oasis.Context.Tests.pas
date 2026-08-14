@@ -33,6 +33,9 @@ type
 
     [Test]
     procedure Failed_Plugin_Does_Not_Stop_Others;
+
+    [Test]
+    procedure Reload_Re_Runs_And_Tears_Down_Effects_And_Listeners;
   end;
 
 implementation
@@ -208,6 +211,34 @@ begin
   finally
     LTrace.Free;
   end;
+end;
+
+procedure TContextTests.Reload_Re_Runs_And_Tears_Down_Effects_And_Listeners;
+var
+  Ctx: IContext;
+  LApply, LTeardown, LHeard: Integer;
+begin
+  LApply := 0;
+  LTeardown := 0;
+  LHeard := 0;
+  Ctx := TContext.Create('root');
+  Ctx.Plugin('p',
+    procedure(C: IContext)
+    begin
+      Inc(LApply);
+      C.Effects.AddCleanup(procedure begin Inc(LTeardown); end);
+      C.Events.On('ping', procedure(const A: array of const) begin Inc(LHeard); end);
+    end);
+  Ctx.Events.Emit('ping', []);
+  Assert.AreEqual(1, LApply);
+  Assert.AreEqual(1, LHeard);
+  Assert.AreEqual(0, LTeardown);
+  Ctx.Reload;
+  Assert.AreEqual(2, LApply);      // Apply re-ran
+  Assert.AreEqual(1, LTeardown);   // old effect cleaned up between runs
+  Ctx.Events.Emit('ping', []);
+  Assert.AreEqual(2, LHeard);      // old listener removed (not duplicated)
+  Ctx.Dispose;
 end;
 
 initialization

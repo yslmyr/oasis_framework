@@ -58,6 +58,7 @@ type
   public
     constructor Create(AOwner: IEffectScope; AParent: IEventBus);
     destructor Destroy; override;
+    procedure SetOwnerScope(AScope: IEffectScope); override;
     function OnAsync(const AEvent: TEventKey; AHandler: TAsyncEventHandler): TDisposer;
     function Parallel(const AEvent: TEventKey; const AArgs: array of const): Integer;
     function SerialAsync(const AEvent: TEventKey; const AArgs: array of const): Integer;
@@ -101,6 +102,17 @@ begin
   FAsyncListeners.Free;
   FAsyncLock.Free;
   inherited Destroy;
+end;
+
+procedure TAsyncEventBus.SetOwnerScope(AScope: IEffectScope);
+begin
+  inherited SetOwnerScope(AScope);   { update sync listeners' owner }
+  FAsyncLock.Enter;
+  try
+    FAsyncOwner := AScope;           { update async listeners' owner too }
+  finally
+    FAsyncLock.Leave;
+  end;
 end;
 
 function TAsyncEventBus.EnsureAsyncList(const AEvent: TEventKey): TList<TAsyncListener>;

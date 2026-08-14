@@ -59,19 +59,28 @@ type
     function  Fork(const AName: string = ''): IContext;
 
     procedure Dispose;
+    { Tear down all plugin side-effects (effects + event listeners) and re-run
+      every mounted plugin's Apply. Services are overwritten on re-register. }
+    procedure Reload;
   end;
 
   TEventBusFactory = reference to function(AOwner: IEffectScope;
                                            AParent: IEventBus): IEventBus;
 
   TContext = class(TInterfacedObject, IContext)
+  strict private type
+    TPluginEntry = record
+      Apply: TProc<IContext>;
+      Returned: TFunc<IContext, TDisposer>;
+      Fiber: IEffectScope;
+    end;
   strict private
     FName: string;
     FParent: IContext;
     FContextEffects: IEffectScope;
     FServices: IServiceRegistry;
     FEvents: IEventBus;
-    FFibers: TList<IEffectScope>;
+    FPlugins: TList<TPluginEntry>;
     FChildren: TList<IContext>;
     FActiveFiber: IEffectScope;
     FDisposed: Boolean;
@@ -95,6 +104,7 @@ type
     procedure Plugin(const AName: string; AFn: TFunc<IContext, TDisposer>); overload;
     function  Fork(const AName: string = ''): IContext;
     procedure Dispose;
+    procedure Reload;
   end;
 
 implementation
@@ -118,14 +128,14 @@ begin
     FEvents := CreateEventBus(AParent.Events)
   else
     FEvents := CreateEventBus(nil);
-  FFibers := TList<IEffectScope>.Create;
+  FPlugins := TList<TPluginEntry>.Create;
   FChildren := TList<IContext>.Create;
 end;
 
 destructor TContext.Destroy;
 begin
   Dispose;
-  FFibers.Free;
+  FPlugins.Free;
   FChildren.Free;
   inherited Destroy;
 end;
@@ -197,6 +207,7 @@ var
   LFiber: IEffectScope;
   LPrev: IEffectScope;
   LDisp: TDisposer;
+  LEntry: TPluginEntry;
 begin
   LFiber := TEffectScope.Create;
   LPrev := FActiveFiber;        // save (nested mounts restore it)
@@ -224,7 +235,10 @@ begin
   finally
     FActiveFiber := LPrev;
   end;
-  FFibers.Add(LFiber);
+  LEntry.Apply := AApply;
+  LEntry.Returned := AReturned;
+  LEntry.Fiber := LFiber;
+  FPlugins.Add(LEntry);
 end;
 
 procedure TContext.Plugin(APlugin: IPlugin);
@@ -294,10 +308,9 @@ begin
     end;
   end;
   FChildren.Clear;
-
-  for I := FFibers.Count - 1 downto 0 do
+  for I := FPlugins.Count - 1 downto 0 do
   try
-    FFibers[I].Dispose;
+    FPlugins[I].Fiber.Dispose;
   except
     on E: Exception do
     begin
@@ -306,7 +319,7 @@ begin
       LMsgs[High(LMsgs)] := E.Message;
     end;
   end;
-  FFibers.Clear;
+  FPlugins.Clear;
 
   try
     FContextEffects.Dispose;
@@ -321,6 +334,62 @@ begin
 
   if LFailed then
     raise EOasisDisposeError.Create(LMsgs);
+end;
+
+procedure TContext.Reload;
+var
+  LSnap: TList<TPluginEntry>;
+  I: Integer;
+  LEntry: TPluginEntry;
+  LFailed: Boolean;
+  LMsgs: TArray<string>;
+begin
+  if FDisposed then
+    Exit;
+  LSnap := TList<TPluginEntry>.Create;
+  try
+    for I := 0 to FPlugins.Count - 1 do
+      LSnap.Add(FPlugins[I]);
+    LFailed := False;
+    { 1. tear down plugin fibers (reverse) - reverses their registered effects }
+    for I := LSnap.Count - 1 downto 0 do
+    try
+      LSnap[I].Fiber.Dispose;
+    except
+      on E: Exception do
+      begin
+        LFailed := True;
+        SetLength(LMsgs, Length(LMsgs) + 1);
+        LMsgs[High(LMsgs)] := E.Message;
+      end;
+    end;
+    FPlugins.Clear;
+    { 2. tear down context-level effects (this also removes ALL event listeners,
+      since On() registered their auto-unsubscribe here) }
+    try
+      FContextEffects.Dispose;
+    except
+      on E: Exception do
+      begin
+        LFailed := True;
+        SetLength(LMsgs, Length(LMsgs) + 1);
+        LMsgs[High(LMsgs)] := E.Message;
+      end;
+    end;
+    { 3. fresh context scope; rewire the bus so new listeners attach here }
+    FContextEffects := TEffectScope.Create;
+    FEvents.SetOwnerScope(FContextEffects);
+    { 4. re-run every plugin's Apply (re-registers effects/listeners/services) }
+    for I := 0 to LSnap.Count - 1 do
+    begin
+      LEntry := LSnap[I];
+      MountUnderFreshFiber(LEntry.Apply, LEntry.Returned);
+    end;
+    if LFailed then
+      raise EOasisDisposeError.Create(LMsgs);
+  finally
+    LSnap.Free;
+  end;
 end;
 
 end.

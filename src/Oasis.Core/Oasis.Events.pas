@@ -31,6 +31,9 @@ type
     function  Waterfall(const AEvent: TEventKey; const AArgs: array of const): Boolean;
     { Remove the listener registered under AToken for AEvent (idempotent). }
     procedure RemoveListener(const AEvent: TEventKey; AToken: Integer);
+    { Reassign the scope that owns auto-unsubscribe cleanups (used by reload to
+      rewire listeners to a fresh scope). }
+    procedure SetOwnerScope(AScope: IEffectScope);
   end;
 
   TEventBus = class(TInterfacedObject, IEventBus)
@@ -60,6 +63,7 @@ type
     procedure Serial(const AEvent: TEventKey; const AArgs: array of const);
     function  Waterfall(const AEvent: TEventKey; const AArgs: array of const): Boolean;
     procedure RemoveListener(const AEvent: TEventKey; AToken: Integer);
+    procedure SetOwnerScope(AScope: IEffectScope); virtual;
   end;
 
 implementation
@@ -127,6 +131,16 @@ begin
       if LList.Count = 0 then
         FListeners.Remove(AEvent);
     end;
+  finally
+    FLock.Leave;
+  end;
+end;
+
+procedure TEventBus.SetOwnerScope(AScope: IEffectScope);
+begin
+  FLock.Enter;
+  try
+    FOwner := AScope;
   finally
     FLock.Leave;
   end;
