@@ -553,3 +553,29 @@ MVP = `Oasis.Core` + `Oasis.Hosting`（`TInProcPluginLoader` + `THost`）。全�
 **宿主构建要求**：`dcc32 -LUrtl`（共享 rtl.bpl），运行期 `rtl.bpl` 须在 PATH。一个副作用：`-LUrtl` 下控制台 stdout 可能被静默丢弃，故 `BplDemo` 同时把结果写入 `bpldemo_out.txt`。
 
 **验证**：`samples/BplPlugin/SamplePlugin.bpl`（注册 `IGreeting` 服务）；`demos/BplDemo` 加载它并解析服务 → `bpldemo_out.txt` 输出 `Hello from BPL, world` / `Pending: 0  Failed: 0`，进程退出码 0、无访问冲突。
+
+---
+
+## 15. 四期实现笔记（Phase 4 — `Context.Reload`，已实现）
+
+原 spec 把 reload 列为"远期、评估中"。现按"销毁全部副作用 + 重新挂载"落地为**上下文级** `IContext.Reload`：
+
+```
+Reload():
+  1. 快照全部已挂载插件的 (Apply, Returned, Fiber)
+  2. 逆序销毁各 fiber（回卷其 Effects）
+  3. 销毁上下文级 effect 作用域（同时移除所有事件监听——On() 的自动退订挂在这里）
+  4. 重建上下文作用域，并 SetOwnerScope 把总线拥有者改指向新作用域
+  5. 对每个插件重新跑 Apply（在新 fiber 上重新注册 effect/监听/服务）
+```
+
+**为支持 reload 做的改动：**
+- `IEventBus.SetOwnerScope(scope)`（virtual）：reload 重建上下文作用域后，用它把总线拥有者改指向新作用域，使重新注册的监听挂到新作用域。`TAsyncEventBus` 覆写它以同时更新异步监听的 owner。
+- `TContext` 用 `TPluginEntry(Apply, Returned, Fiber)` 列表替代原先的 fiber 列表，使 reload 能重新调用每个插件的挂载动作。
+
+**细化与范围（文档化）：**
+- **上下文级** reload（非单插件）。单插件级 reload 需要 fiber 可寻址（按名/句柄），留作后续。
+- **服务**：重新 Apply 时 `AddOrSetValue` 覆盖旧实例；**不做依赖失效级联**（某插件撤回服务时不会自动停用其消费者）。完整级联（service-added/removed 事件驱动激活/停用）是更后续的工作。
+- **children (Fork)**：reload 不递归子上下文。
+
+**验证**：`Oasis.Context.Tests` 新增 `Reload_Re_Runs_And_Tears_Down_Effects_And_Listeners`——reload 后 Apply 计数翻倍、effect 被逆序清理、事件监听未被重复（emit 仅 +1）。MVP 26/26、OTL 6/6 全绿。
