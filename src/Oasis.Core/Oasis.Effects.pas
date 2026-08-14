@@ -4,13 +4,17 @@
   callbacks. Dispose pops in reverse order. A cleanup raising does NOT abort the
   rest; failures are aggregated into EOasisDisposeError. Manual early dispose via
   the returned TDisposer is idempotent and claims the entry so Dispose won't
-  double-run it. }
+  double-run it.
+
+  PERFORMANCE DESIGN (perf pass, see spec §19): the lock is TOasisSpinLock -
+  these critical sections are a few instructions (push/pop/claim) and never
+  held while user cleanup code runs. }
 
 interface
 
 uses
-  System.SysUtils, System.SyncObjs, System.Generics.Collections,
-  Oasis.Types, Oasis.Errors;
+  System.SysUtils, System.Generics.Collections,
+  Oasis.Types, Oasis.Errors, Oasis.Spin;
 
 type
   IEffectScope = interface
@@ -24,6 +28,8 @@ type
 
   TEffectScope = class(TInterfacedObject, IEffectScope)
   private type
+    { Each pushed cleanup is wrapped so manual early-dispose and Dispose never
+      double-run it. Claim() atomically marks the entry as taken. }
     TEntry = class
     public
       Cleanup: TDisposer;
@@ -31,11 +37,12 @@ type
       constructor Create(ACleanup: TDisposer);
     end;
   strict private
-    FLock: TCriticalSection;
+    FLock: TOasisSpinLock;
     FStack: TStack<TEntry>;
     FDisposed: Boolean;
     function Claim(AEntry: TEntry): Boolean;
     procedure PushEntry(AEntry: TEntry);
+    function TryPop(out AEntry: TEntry): Boolean;
   public
     constructor Create;
     destructor Destroy; override;
@@ -62,7 +69,6 @@ end;
 constructor TEffectScope.Create;
 begin
   inherited Create;
-  FLock := TCriticalSection.Create;
   FStack := TStack<TEntry>.Create;
 end;
 
@@ -70,7 +76,6 @@ destructor TEffectScope.Destroy;
 begin
   Dispose;
   FStack.Free;
-  FLock.Free;
   inherited Destroy;
 end;
 
@@ -85,6 +90,7 @@ begin
   try
     if FDisposed then
     begin
+      { already torn down: run immediately and drop, never retain }
       if Assigned(AEntry.Cleanup) then
         AEntry.Cleanup();
       AEntry.Free;
@@ -104,6 +110,18 @@ begin
       Exit(False);
     AEntry.Done := True;
     Result := True;
+  finally
+    FLock.Leave;
+  end;
+end;
+
+function TEffectScope.TryPop(out AEntry: TEntry): Boolean;
+begin
+  FLock.Enter;
+  try
+    Result := FStack.Count > 0;
+    if Result then
+      AEntry := FStack.Pop;
   finally
     FLock.Leave;
   end;
@@ -154,30 +172,20 @@ begin
   end;
 
   LFailed := False;
-  while True do
-  begin
-    FLock.Enter;
+  while TryPop(LEntry) do
+  try
     try
-      if FStack.Count = 0 then
-        Break;
-      LEntry := FStack.Pop;
+      if Claim(LEntry) and Assigned(LEntry.Cleanup) then
+        LEntry.Cleanup();   { runs WITHOUT the lock held }
     finally
-      FLock.Leave;
+      LEntry.Free;
     end;
-    try
-      try
-        if Claim(LEntry) and Assigned(LEntry.Cleanup) then
-          LEntry.Cleanup();
-      finally
-        LEntry.Free;
-      end;
-    except
-      on E: Exception do
-      begin
-        LFailed := True;
-        SetLength(LErrors, Length(LErrors) + 1);
-        LErrors[High(LErrors)] := E.Message;
-      end;
+  except
+    on E: Exception do
+    begin
+      LFailed := True;
+      SetLength(LErrors, Length(LErrors) + 1);
+      LErrors[High(LErrors)] := E.Message;
     end;
   end;
 

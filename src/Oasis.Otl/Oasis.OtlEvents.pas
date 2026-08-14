@@ -16,14 +16,19 @@
       actual value Cordis 'parallel' provides. A non-blocking IOmniFuture<Integer>
       variant is a future refinement.
   Like the sync bus, an OnAsync registration creates a bus<->owner-scope
-  reference cycle broken by calling the scope's Dispose. }
+  reference cycle broken by calling the scope's Dispose.
+
+  PERF PASS (spec §19): async listeners are stored per key as IMMUTABLE arrays
+  (copy-on-write) guarded by a spin lock - Parallel/SerialAsync copy the array
+  reference out once and iterate lock-free (no per-dispatch TList allocation). }
 
 interface
 
 uses
-  System.SysUtils, System.SyncObjs, System.Generics.Collections,
+  System.SysUtils, System.Generics.Collections,
   OtlParallel,
-  Oasis.Types, Oasis.Errors, Oasis.Effects, Oasis.Events, Oasis.Context;
+  Oasis.Types, Oasis.Errors, Oasis.Effects, Oasis.Events, Oasis.Spin,
+  Oasis.Context;
 
 type
   TAsyncEventHandler = reference to procedure(const AArgs: array of const);
@@ -46,13 +51,15 @@ type
       Token: Integer;
       Handler: TAsyncEventHandler;
     end;
+    TAsyncListenerArray = TArray<TAsyncListener>;
   strict private
-    FAsyncLock: TCriticalSection;
+    FAsyncLock: TOasisSpinLock;
     FAsyncOwner: IEffectScope;
-    FAsyncListeners: TObjectDictionary<TEventKey, TList<TAsyncListener>>;
+    FAsyncListeners: TDictionary<TEventKey, TAsyncListenerArray>;
     FAsyncNextToken: Integer;
-    function EnsureAsyncList(const AEvent: TEventKey): TList<TAsyncListener>;
-    procedure SnapshotAsync(const AEvent: TEventKey; out ASnap: TList<TAsyncListener>);
+    function AppendAsync(const AEvent: TEventKey;
+      const AListener: TAsyncListener): Integer;
+    function SnapshotAsync(const AEvent: TEventKey): TAsyncListenerArray;
     function MakeFuture(AHandler: TAsyncEventHandler;
       const AArgs: TArray<TVarRec>): IOmniFuture<string>;
   public
@@ -91,16 +98,14 @@ end;
 constructor TAsyncEventBus.Create(AOwner: IEffectScope; AParent: IEventBus);
 begin
   inherited Create(AOwner, AParent);
-  FAsyncLock := TCriticalSection.Create;
   FAsyncOwner := AOwner;   // own ref for OnAsync auto-unsubscribe
-  FAsyncListeners := TObjectDictionary<TEventKey, TList<TAsyncListener>>.Create([doOwnsValues]);
+  FAsyncListeners := TDictionary<TEventKey, TAsyncListenerArray>.Create;
   FAsyncNextToken := 1;
 end;
 
 destructor TAsyncEventBus.Destroy;
 begin
   FAsyncListeners.Free;
-  FAsyncLock.Free;
   inherited Destroy;
 end;
 
@@ -115,28 +120,32 @@ begin
   end;
 end;
 
-function TAsyncEventBus.EnsureAsyncList(const AEvent: TEventKey): TList<TAsyncListener>;
+function TAsyncEventBus.AppendAsync(const AEvent: TEventKey;
+  const AListener: TAsyncListener): Integer;
+var
+  LArr: TAsyncListenerArray;
 begin
-  if not FAsyncListeners.TryGetValue(AEvent, Result) then
-  begin
-    Result := TList<TAsyncListener>.Create;
-    FAsyncListeners.Add(AEvent, Result);
+  FAsyncLock.Enter;
+  try
+    if not FAsyncListeners.TryGetValue(AEvent, LArr) then
+      LArr := nil;
+    SetLength(LArr, Length(LArr) + 1);
+    Result := FAsyncNextToken;
+    Inc(FAsyncNextToken);
+    LArr[High(LArr)] := AListener;
+    LArr[High(LArr)].Token := Result;
+    FAsyncListeners.AddOrSetValue(AEvent, LArr);
+  finally
+    FAsyncLock.Leave;
   end;
 end;
 
-procedure TAsyncEventBus.SnapshotAsync(const AEvent: TEventKey;
-  out ASnap: TList<TAsyncListener>);
-var
-  LSource: TList<TAsyncListener>;
+function TAsyncEventBus.SnapshotAsync(const AEvent: TEventKey): TAsyncListenerArray;
 begin
-  ASnap := nil;
   FAsyncLock.Enter;
   try
-    if FAsyncListeners.TryGetValue(AEvent, LSource) then
-    begin
-      ASnap := TList<TAsyncListener>.Create;
-      ASnap.AddRange(LSource);
-    end;
+    if not FAsyncListeners.TryGetValue(AEvent, Result) then
+      Result := nil;
   finally
     FAsyncLock.Leave;
   end;
@@ -173,16 +182,9 @@ var
 begin
   LSelf := Self;   // refcounted keep-alive (cycle broken by owner scope Dispose)
   LEvent := AEvent;
-  LToken := FAsyncNextToken;
-  Inc(FAsyncNextToken);
-  LListener.Token := LToken;
+  LListener.Token := 0;
   LListener.Handler := AHandler;
-  FAsyncLock.Enter;
-  try
-    EnsureAsyncList(AEvent).Add(LListener);
-  finally
-    FAsyncLock.Leave;
-  end;
+  LToken := AppendAsync(AEvent, LListener);
   if FAsyncOwner <> nil then
     FAsyncOwner.AddCleanup(procedure begin LSelf.RemoveAsyncListener(LEvent, LToken); end);
   Result := nil;
@@ -190,21 +192,27 @@ end;
 
 procedure TAsyncEventBus.RemoveAsyncListener(const AEvent: TEventKey; AToken: Integer);
 var
-  LList: TList<TAsyncListener>;
-  I: Integer;
+  LArr, LNew: TAsyncListenerArray;
+  I, J: Integer;
 begin
   FAsyncLock.Enter;
   try
-    if FAsyncListeners.TryGetValue(AEvent, LList) then
+    if not FAsyncListeners.TryGetValue(AEvent, LArr) then
+      Exit;
+    SetLength(LNew, Length(LArr));
+    J := 0;
+    for I := 0 to High(LArr) do
+      if LArr[I].Token <> AToken then
+      begin
+        LNew[J] := LArr[I];
+        Inc(J);
+      end;
+    if J = 0 then
+      FAsyncListeners.Remove(AEvent)
+    else
     begin
-      for I := 0 to LList.Count - 1 do
-        if LList[I].Token = AToken then
-        begin
-          LList.Delete(I);
-          Break;
-        end;
-      if LList.Count = 0 then
-        FAsyncListeners.Remove(AEvent);
+      SetLength(LNew, J);
+      FAsyncListeners.AddOrSetValue(AEvent, LNew);
     end;
   finally
     FAsyncLock.Leave;
@@ -214,7 +222,7 @@ end;
 function TAsyncEventBus.Parallel(const AEvent: TEventKey;
   const AArgs: array of const): Integer;
 var
-  LSnap: TList<TAsyncListener>;
+  LArr: TAsyncListenerArray;
   LArgs: TArray<TVarRec>;
   LFutures: TList<IOmniFuture<string>>;
   LListener: TAsyncListener;
@@ -224,13 +232,13 @@ var
   LMsg: string;
 begin
   Result := 0;
-  SnapshotAsync(AEvent, LSnap);
-  if LSnap = nil then
+  LArr := SnapshotAsync(AEvent);
+  if LArr = nil then
     Exit;
   LArgs := OasisCopyArgs(AArgs);
   LFutures := TList<IOmniFuture<string>>.Create;
   try
-    for LListener in LSnap do
+    for LListener in LArr do
       LFutures.Add(MakeFuture(LListener.Handler, LArgs));
     LFailed := False;
     for LFut in LFutures do
@@ -246,7 +254,6 @@ begin
     Result := LFutures.Count;
   finally
     LFutures.Free;
-    LSnap.Free;
   end;
   if LFailed then
     raise EOasisEventError.Create(LMsgs);
@@ -255,7 +262,7 @@ end;
 function TAsyncEventBus.SerialAsync(const AEvent: TEventKey;
   const AArgs: array of const): Integer;
 var
-  LSnap: TList<TAsyncListener>;
+  LArr: TAsyncListenerArray;
   LArgs: TArray<TVarRec>;
   LListener: TAsyncListener;
   LFut: IOmniFuture<string>;
@@ -264,26 +271,22 @@ var
   LMsg: string;
 begin
   Result := 0;
-  SnapshotAsync(AEvent, LSnap);
-  if LSnap = nil then
+  LArr := SnapshotAsync(AEvent);
+  if LArr = nil then
     Exit;
   LArgs := OasisCopyArgs(AArgs);
-  try
-    LFailed := False;
-    for LListener in LSnap do
+  LFailed := False;
+  for LListener in LArr do
+  begin
+    LFut := MakeFuture(LListener.Handler, LArgs);
+    LMsg := LFut.Value;   // await before launching the next (sequential)
+    if LMsg <> '' then
     begin
-      LFut := MakeFuture(LListener.Handler, LArgs);
-      LMsg := LFut.Value;   // await before launching the next (sequential)
-      if LMsg <> '' then
-      begin
-        LFailed := True;
-        SetLength(LMsgs, Length(LMsgs) + 1);
-        LMsgs[High(LMsgs)] := LMsg;
-      end;
-      Inc(Result);
+      LFailed := True;
+      SetLength(LMsgs, Length(LMsgs) + 1);
+      LMsgs[High(LMsgs)] := LMsg;
     end;
-  finally
-    LSnap.Free;
+    Inc(Result);
   end;
   if LFailed then
     raise EOasisEventError.Create(LMsgs);

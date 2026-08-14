@@ -9,6 +9,7 @@ uses
   DUnitX.TestFramework,
   Oasis.Types in '..\src\Oasis.Core\Oasis.Types.pas',
   Oasis.Errors in '..\src\Oasis.Core\Oasis.Errors.pas',
+  Oasis.Spin in '..\src\Oasis.Core\Oasis.Spin.pas',
   Oasis.Effects in '..\src\Oasis.Core\Oasis.Effects.pas',
   Oasis.Services in '..\src\Oasis.Core\Oasis.Services.pas',
   Oasis.Events in '..\src\Oasis.Core\Oasis.Events.pas',

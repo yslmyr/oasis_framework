@@ -6,13 +6,18 @@
   when the owning plugin's fiber disposes) fires OnServiceRemoved so the Host can
   deactivate dependents (dependency cascade). The interface is non-generic
   (Delphi forbids generic interface methods); callers register via the
-  interface-id to TGUID compiler magic: Services.Register(IConfig, Instance). }
+  interface-id to TGUID compiler magic: Services.Register(IConfig, Instance).
+
+  PERFORMANCE DESIGN (perf pass, see spec §19): the registry is read-mostly
+  (every Get/Inject resolution) and write-rare (mount-time), so reads take the
+  lightweight multi-reader spin lock and may run CONCURRENTLY; only
+  Register/Unregister/handler setters take the write side. }
 
 interface
 
 uses
-  System.SysUtils, System.SyncObjs, System.Generics.Collections,
-  Oasis.Types, Oasis.Errors, Oasis.Effects;
+  System.SysUtils, System.Generics.Collections,
+  Oasis.Types, Oasis.Errors, Oasis.Effects, Oasis.Spin;
 
 type
   TServiceAddedEvent = reference to procedure(const AGUID: TGUID);
@@ -37,7 +42,7 @@ type
 
   TServiceRegistry = class(TInterfacedObject, IServiceRegistry)
   strict private
-    FLock: TCriticalSection;
+    FLock: TOasisRWSpinLock;
     FMap: TDictionary<TGUID, IInterface>;
     FParent: IServiceRegistry;
     FOnServiceAdded: TServiceAddedEvent;
@@ -64,7 +69,6 @@ implementation
 constructor TServiceRegistry.Create(AParent: IServiceRegistry);
 begin
   inherited Create;
-  FLock := TCriticalSection.Create;
   FMap := TDictionary<TGUID, IInterface>.Create;
   FParent := AParent;
 end;
@@ -74,7 +78,6 @@ begin
   { Just drop the map. Do NOT fire removal hooks here: teardown re-entrancy is
     handled by the owner scopes (fiber disposals already ran their cleanups). }
   FMap.Free;
-  FLock.Free;
   inherited Destroy;
 end;
 
@@ -85,13 +88,13 @@ var
   LReg: TServiceRegistry;
   LInst: IInterface;
 begin
-  FLock.Enter;
+  FLock.EnterWrite;
   try
     FMap.AddOrSetValue(AGUID, AInstance);
     LAdded := FOnServiceAdded;
     LOwner := FOwner;
   finally
-    FLock.Leave;
+    FLock.LeaveWrite;
   end;
   if LOwner <> nil then
   begin
@@ -114,7 +117,7 @@ function TServiceRegistry.Unregister(const AGUID: TGUID): Boolean;
 var
   LRemoved: TServiceRemovedEvent;
 begin
-  FLock.Enter;
+  FLock.EnterWrite;
   try
     Result := FMap.ContainsKey(AGUID);
     if Result then
@@ -123,17 +126,18 @@ begin
       LRemoved := FOnServiceRemoved;
     end;
   finally
-    FLock.Leave;
+    FLock.LeaveWrite;
   end;
   if Result and Assigned(LRemoved) then
     LRemoved(AGUID);
 end;
+
 procedure TServiceRegistry.RemoveIfSame(const AGUID: TGUID; AInstance: IInterface);
 var
   LRemoved: TServiceRemovedEvent;
   LCurrent: IInterface;
 begin
-  FLock.Enter;
+  FLock.EnterWrite;
   try
     if FMap.TryGetValue(AGUID, LCurrent) and (LCurrent = AInstance) then
     begin
@@ -143,11 +147,12 @@ begin
     else
       Exit;
   finally
-    FLock.Leave;
+    FLock.LeaveWrite;
   end;
   if Assigned(LRemoved) then
     LRemoved(AGUID);
 end;
+
 function TServiceRegistry.Get(const AGUID: TGUID): IInterface;
 begin
   if not Resolve(AGUID, Result) then
@@ -156,11 +161,12 @@ end;
 
 function TServiceRegistry.Resolve(const AGUID: TGUID; out AInstance: IInterface): Boolean;
 begin
-  FLock.Enter;
+  { hot path: shared read lock - concurrent lookups do not block each other }
+  FLock.EnterRead;
   try
     Result := FMap.TryGetValue(AGUID, AInstance);
   finally
-    FLock.Leave;
+    FLock.LeaveRead;
   end;
   if (not Result) and (FParent <> nil) then
     Result := FParent.Resolve(AGUID, AInstance);
@@ -175,31 +181,31 @@ end;
 
 procedure TServiceRegistry.SetOnServiceAdded(AHandler: TServiceAddedEvent);
 begin
-  FLock.Enter;
+  FLock.EnterWrite;
   try
     FOnServiceAdded := AHandler;
   finally
-    FLock.Leave;
+    FLock.LeaveWrite;
   end;
 end;
 
 procedure TServiceRegistry.SetOnServiceRemoved(AHandler: TServiceRemovedEvent);
 begin
-  FLock.Enter;
+  FLock.EnterWrite;
   try
     FOnServiceRemoved := AHandler;
   finally
-    FLock.Leave;
+    FLock.LeaveWrite;
   end;
 end;
 
 procedure TServiceRegistry.SetOwnerScope(AScope: IEffectScope);
 begin
-  FLock.Enter;
+  FLock.EnterWrite;
   try
     FOwner := AScope;
   finally
-    FLock.Leave;
+    FLock.LeaveWrite;
   end;
 end;
 

@@ -10,6 +10,7 @@ requires
 contains
   Oasis.Types,
   Oasis.Errors,
+  Oasis.Spin,
   Oasis.Effects,
   Oasis.Services,
   Oasis.Events,

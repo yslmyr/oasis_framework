@@ -661,3 +661,31 @@ MVP **32/32**（新增：Reload_By_Name×2、级联、配置×3）、OTL 6/6，0
 - 宿主 `-LUrtl -LUvcl`（共享 rtl370/vcl370 运行时包）；运行期 PATH 需 `rtl370.bpl`/`vcl370.bpl`/`Oasis.Core.bpl`（或复制到 exe 旁）。
 - 缺 `Oasis.Core.bpl` 时二次异常会触发 VCL 模态错误框（无头环境即挂起）→ selftest 包 try/except 兜底写 `EXCEPTION:` 后退出。
 - `build.cmd` 纳入宿主与 VCL BPL 插件构建，ALL GREEN。
+
+---
+
+## 19. 性能改造笔记（借鉴 mORMot2 模式，已实现）
+
+针对三大热路径（事件分发 / 服务查询 / 副作用栈），借鉴 mORMot2 的并发基础设施模式（**自研实现**，保持 MIT；未复制其 MPL 源码）：
+
+### 实现
+
+1. **`Oasis.Spin`（新单元）**：`TOasisSpinLock`（互斥自旋，`TInterlocked.CompareExchange` + `SwitchToThread` 让步，4 字节）与 `TOasisRWSpinLock`（多读单写，位 0=写、高位=读计数）。对应 mORMot2 的 `TLightLock`/`TRWLightLock` 思路；仅适用于"几个 CPU 周期"的临界区，非重入。
+2. **事件总线（`Oasis.Events` / `Oasis.OtlEvents`）**：监听器改为**按事件键的不可变动态数组**（copy-on-write）。分发（Emit/Waterfall/Parallel）在短自旋锁下**拷出数组引用**（动态数组赋值=原子引用计数递增，零分配），随后**无锁遍历**——局部引用保证快照存活。注册/退订仅在变更时重建该键数组。锁从 `TCriticalSection`（内核对象）换成 `TOasisSpinLock`（用户态）。
+3. **服务注册表（`Oasis.Services`）**：读多写少（每次 `Get`/`Inject` 解析 vs 挂载期注册）——`Resolve`/`Has` 走 `TOasisRWSpinLock` **读锁（并发不互斥）**；`Register`/`Unregister`/setter 走写锁。
+4. **副作用栈（`Oasis.Effects`）**：`TCriticalSection` → `TOasisSpinLock`（临界区仅 push/pop/claim 几条指令；用户 cleanup 依然在**锁外**执行）。
+
+### 微基准（`tests/OasisBench.dpr`，2M ops，同机同 flag `-$O+`）
+
+| 路径 | 改造前（main） | 改造后 | 提升 |
+|---|---|---|---|
+| Emit（1 监听器） | 2.55M ops/s | **9.3M ops/s** | **3.6×** |
+| Emit（0 监听器） | 13.9M ops/s | 12.2M ops/s | 持平（本就无分配，剩字符串哈希查字典） |
+| Resolve（命中） | 16.0M ops/s | **17.2M ops/s** | +8% |
+| On（分散键 ×200k） | 2.25M ops/s | 1.06M ops/s | **回归 ~2×**（见权衡） |
+
+### 权衡（文档化）
+
+- **同一键上海量追加是 O(n²)**：copy-on-write 每次追加重建数组。插件框架实际场景每键监听器是个位数（分发热路径），该权衡正确；若未来需要海量同键注册，可加"批量提交"API。
+- **Waterfall 每次调用有一次小分配**（args 拷入 `TArray<TVarRec>`，开放数组不可被闭包捕获——Delphi 语言限制，重构为类方法递归 + 堆状态对象后引入）。
+- 顺手修复：`On`/`OnWaterfall` 退订闭包此前捕获裸 `Self`（潜伏 use-after-free），改为捕获 `IEventBus` 接口引用（与 `OnAsync` 既有模式一致，环由 `Dispose` 断开）。

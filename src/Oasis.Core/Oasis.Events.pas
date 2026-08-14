@@ -4,19 +4,23 @@
   order, with per-listener fault isolation (failures aggregate into
   EOasisEventError). Waterfall is around-middleware: a listener that does not
   call Next short-circuits the chain. On() attaches auto-unsubscription to an
-  IEffectScope so listeners are reclaimed when their owner unloads. Each
-  registration gets a unique integer token; the auto-unsub cleanup captures the
-  bus as IEventBus (refcounted, keeping it alive until cleanup runs) and calls
-  RemoveListener(Event, Token). NOTE: bus.FOwner(scope) and the scope's cleanup
-  closure(bus) form a reference cycle - it is broken by calling the scope's
-  Dispose, which the Context does during teardown. Emit bubbles to the parent
-  bus (Fork support). }
+  IEffectScope so listeners are reclaimed when their owner unloads. Emit
+  bubbles to the parent bus (Fork support).
+
+  PERFORMANCE DESIGN (perf pass, see spec §19): each event key maps to an
+  IMMUTABLE listener array (copy-on-write). Dispatch (Emit/Waterfall) copies
+  the array reference out under a short spin lock - no allocation, no list
+  copy per dispatch - then iterates lock-free (the local dynarray reference
+  keeps the snapshot alive even if a writer swaps in a new array).
+  Mutations (On/RemoveListener) rebuild the array for that key only. The lock
+  is TOasisSpinLock (user-mode, a few cycles) instead of a kernel
+  TCriticalSection. }
 
 interface
 
 uses
-  System.SysUtils, System.SyncObjs, System.Generics.Collections,
-  Oasis.Types, Oasis.Errors, Oasis.Effects;
+  System.SysUtils, System.Generics.Collections,
+  Oasis.Types, Oasis.Errors, Oasis.Effects, Oasis.Spin;
 
 type
   IEventBus = interface
@@ -45,14 +49,23 @@ type
       Emit: TEventHandler;
       Waterfall: TWaterfallHandler;
     end;
+    TListenerArray = TArray<TListener>;
+    { heap state so anonymous Next callbacks can capture + mutate it (var
+      parameters and nested procedures cannot be captured: E2555) }
+    TWfState = class
+    public
+      ReachedEnd: Boolean;
+    end;
   strict private
-    FLock: TCriticalSection;
+    FLock: TOasisSpinLock;
     FOwner: IEffectScope;
     FParent: IEventBus;
-    FListeners: TObjectDictionary<TEventKey, TList<TListener>>;
+    FListeners: TDictionary<TEventKey, TListenerArray>;
     FNextToken: Integer;
-    function EnsureList(const AEvent: TEventKey): TList<TListener>;
-    procedure Snapshot(const AEvent: TEventKey; out ASnap: TList<TListener>);
+    function AppendListener(const AEvent: TEventKey;
+      const AListener: TListener): Integer;
+    procedure WaterfallRun(const AArr: TListenerArray; const AArgs: TArray<TVarRec>;
+      AFrom: Integer; AState: TWfState);
   public
     constructor Create(AOwner: IEffectScope; AParent: IEventBus);
     destructor Destroy; override;
@@ -73,63 +86,115 @@ implementation
 constructor TEventBus.Create(AOwner: IEffectScope; AParent: IEventBus);
 begin
   inherited Create;
-  FLock := TCriticalSection.Create;
   FOwner := AOwner;
   FParent := AParent;
-  FListeners := TObjectDictionary<TEventKey, TList<TListener>>.Create([doOwnsValues]);
+  FListeners := TDictionary<TEventKey, TListenerArray>.Create;
   FNextToken := 1;
 end;
 
 destructor TEventBus.Destroy;
 begin
   FListeners.Free;
-  FLock.Free;
   inherited Destroy;
 end;
 
-function TEventBus.EnsureList(const AEvent: TEventKey): TList<TListener>;
-begin
-  if not FListeners.TryGetValue(AEvent, Result) then
-  begin
-    Result := TList<TListener>.Create;
-    FListeners.Add(AEvent, Result);
-  end;
-end;
-
-procedure TEventBus.Snapshot(const AEvent: TEventKey; out ASnap: TList<TListener>);
+function TEventBus.AppendListener(const AEvent: TEventKey;
+  const AListener: TListener): Integer;
 var
-  LSource: TList<TListener>;
+  LArr: TListenerArray;
 begin
-  ASnap := nil;
+  { mutation path: rebuild the key's immutable array (copy-on-write) }
   FLock.Enter;
   try
-    if FListeners.TryGetValue(AEvent, LSource) then
-    begin
-      ASnap := TList<TListener>.Create;
-      ASnap.AddRange(LSource);
-    end;
+    if not FListeners.TryGetValue(AEvent, LArr) then
+      LArr := nil;
+    SetLength(LArr, Length(LArr) + 1);
+    Result := FNextToken;
+    Inc(FNextToken);
+    LArr[High(LArr)] := AListener;
+    LArr[High(LArr)].Token := Result;
+    FListeners.AddOrSetValue(AEvent, LArr);
   finally
     FLock.Leave;
   end;
 end;
 
+function TEventBus.On(const AEvent: TEventKey;
+  AHandler: TEventHandler): TDisposer;
+var
+  LListener: TListener;
+  LToken: Integer;
+  LSelf: IEventBus;
+begin
+  LListener.Token := 0;
+  LListener.Kind := lkEmit;
+  LListener.Emit := AHandler;
+  LListener.Waterfall := nil;
+  LToken := AppendListener(AEvent, LListener);
+  if FOwner <> nil then
+  begin
+    { capture the bus as its INTERFACE so the cleanup keeps it alive even if
+      the bus variable is released before the owning scope (interface capture,
+      not the raw class pointer which would use-after-free). The resulting
+      bus<->scope reference cycle is broken by the scope's Dispose - same
+      pattern as OnAsync. }
+    LSelf := Self;
+    FOwner.AddCleanup(
+      procedure
+      begin
+        LSelf.RemoveListener(AEvent, LToken);
+      end);
+  end;
+  Result := nil;
+end;
+
+function TEventBus.OnWaterfall(const AEvent: TEventKey;
+  AHandler: TWaterfallHandler): TDisposer;
+var
+  LListener: TListener;
+  LToken: Integer;
+  LSelf: IEventBus;
+begin
+  LListener.Token := 0;
+  LListener.Kind := lkWaterfall;
+  LListener.Emit := nil;
+  LListener.Waterfall := AHandler;
+  LToken := AppendListener(AEvent, LListener);
+  if FOwner <> nil then
+  begin
+    LSelf := Self;
+    FOwner.AddCleanup(
+      procedure
+      begin
+        LSelf.RemoveListener(AEvent, LToken);
+      end);
+  end;
+  Result := nil;
+end;
+
 procedure TEventBus.RemoveListener(const AEvent: TEventKey; AToken: Integer);
 var
-  LList: TList<TListener>;
-  I: Integer;
+  LArr, LNew: TListenerArray;
+  I, J: Integer;
 begin
   FLock.Enter;
   try
-    if FListeners.TryGetValue(AEvent, LList) then
+    if not FListeners.TryGetValue(AEvent, LArr) then
+      Exit;
+    SetLength(LNew, Length(LArr));
+    J := 0;
+    for I := 0 to High(LArr) do
+      if LArr[I].Token <> AToken then
+      begin
+        LNew[J] := LArr[I];
+        Inc(J);
+      end;
+    if J = 0 then
+      FListeners.Remove(AEvent)
+    else
     begin
-      for I := 0 to LList.Count - 1 do
-        if LList[I].Token = AToken then
-        begin
-          LList.Delete(I);
-          Break;
-        end;
-      if LList.Count = 0 then
-        FListeners.Remove(AEvent);
+      SetLength(LNew, J);
+      FListeners.AddOrSetValue(AEvent, LNew);
     end;
   finally
     FLock.Leave;
@@ -146,94 +211,36 @@ begin
   end;
 end;
 
-function TEventBus.On(const AEvent: TEventKey;
-  AHandler: TEventHandler): TDisposer;
-var
-  LSelf: IEventBus;
-  LEvent: TEventKey;
-  LToken: Integer;
-  LListener: TListener;
-begin
-  LSelf := Self;
-  LEvent := AEvent;
-  LToken := FNextToken;
-  Inc(FNextToken);
-  LListener.Token := LToken;
-  LListener.Kind := lkEmit;
-  LListener.Emit := AHandler;
-  LListener.Waterfall := nil;
-  FLock.Enter;
-  try
-    EnsureList(AEvent).Add(LListener);
-  finally
-    FLock.Leave;
-  end;
-  if FOwner <> nil then
-    FOwner.AddCleanup(
-      procedure
-      begin
-        LSelf.RemoveListener(LEvent, LToken);
-      end);
-  Result := nil;
-end;
-
-function TEventBus.OnWaterfall(const AEvent: TEventKey;
-  AHandler: TWaterfallHandler): TDisposer;
-var
-  LSelf: IEventBus;
-  LEvent: TEventKey;
-  LToken: Integer;
-  LListener: TListener;
-begin
-  LSelf := Self;
-  LEvent := AEvent;
-  LToken := FNextToken;
-  Inc(FNextToken);
-  LListener.Token := LToken;
-  LListener.Kind := lkWaterfall;
-  LListener.Emit := nil;
-  LListener.Waterfall := AHandler;
-  FLock.Enter;
-  try
-    EnsureList(AEvent).Add(LListener);
-  finally
-    FLock.Leave;
-  end;
-  if FOwner <> nil then
-    FOwner.AddCleanup(
-      procedure
-      begin
-        LSelf.RemoveListener(LEvent, LToken);
-      end);
-  Result := nil;
-end;
-
 procedure TEventBus.Emit(const AEvent: TEventKey; const AArgs: array of const);
 var
-  LSnapshot: TList<TListener>;
+  LArr: TListenerArray;
   LListener: TListener;
   LErrors: TArray<string>;
   LFailed: Boolean;
 begin
-  Snapshot(AEvent, LSnapshot);
-  LFailed := False;
-  if LSnapshot <> nil then
+  { hot path: copy the array reference out (refcount-bumped dynarray), then
+    iterate lock-free }
+  FLock.Enter;
   try
-    for LListener in LSnapshot do
-      if LListener.Kind = lkEmit then
-      try
-        LListener.Emit(AArgs);
-      except
-        on E: Exception do
-        begin
-          LFailed := True;
-          SetLength(LErrors, Length(LErrors) + 1);
-          LErrors[High(LErrors)] := E.Message;
-        end;
-      end;
+    if not FListeners.TryGetValue(AEvent, LArr) then
+      LArr := nil;
   finally
-    LSnapshot.Free;
+    FLock.Leave;
   end;
+
+  LFailed := False;
+  for LListener in LArr do
+    if LListener.Kind = lkEmit then
+    try
+      LListener.Emit(AArgs);
+    except
+      on E: Exception do
+      begin
+        LFailed := True;
+        SetLength(LErrors, Length(LErrors) + 1);
+        LErrors[High(LErrors)] := E.Message;
+      end;
+    end;
 
   if FParent <> nil then
     FParent.Emit(AEvent, AArgs);
@@ -251,39 +258,65 @@ end;
 function TEventBus.Waterfall(const AEvent: TEventKey;
   const AArgs: array of const): Boolean;
 var
-  LSnapshot: TList<TListener>;
+  LArr: TListenerArray;
+  LArgs: TArray<TVarRec>;
   I: Integer;
-  LContinue: Boolean;
-  LStop: Boolean;
+  LState: TWfState;
+begin
+  FLock.Enter;
+  try
+    if not FListeners.TryGetValue(AEvent, LArr) then
+      LArr := nil;
+  finally
+    FLock.Leave;
+  end;
+  { open arrays cannot be captured by anonymous methods - copy once into a
+    dynarray (an 'array of const' parameter accepts it directly) }
+  SetLength(LArgs, Length(AArgs));
+  for I := 0 to High(AArgs) do
+    LArgs[I] := AArgs[I];
+  LState := TWfState.Create;
+  try
+    LState.ReachedEnd := False;
+    if LArr <> nil then
+      WaterfallRun(LArr, LArgs, 0, LState);
+    Result := LState.ReachedEnd;
+  finally
+    LState.Free;
+  end;
+end;
+
+procedure TEventBus.WaterfallRun(const AArr: TListenerArray;
+  const AArgs: TArray<TVarRec>; AFrom: Integer; AState: TWfState);
+var
+  I: Integer;
+  LCalledNext: Boolean;
+  LNext: TWaterfallNext;
   LListener: TListener;
 begin
-  Snapshot(AEvent, LSnapshot);
-  Result := True;
-  if LSnapshot = nil then
-    Exit;
-  try
-    I := 0;
-    LStop := False;
-    while (I < LSnapshot.Count) and not LStop do
+  { class-method recursion: anonymous Next callbacks may capture Self and
+    local vars, but never a nested procedure (E2555) }
+  I := AFrom;
+  while (I <= High(AArr)) and not AState.ReachedEnd do
+  begin
+    LListener := AArr[I];
+    if LListener.Kind = lkWaterfall then
     begin
-      LListener := LSnapshot[I];
-      if LListener.Kind = lkWaterfall then
-      begin
-        LContinue := False;
-        LListener.Waterfall(AArgs,
-          procedure(const ANextArgs: array of const)
-          begin
-            LContinue := True;
-          end);
-        if not LContinue then
-          LStop := True;
-      end;
-      Inc(I);
+      LCalledNext := False;
+      LNext := procedure(const ANextArgs: array of const)
+               begin
+                 if LCalledNext then
+                   Exit;
+                 LCalledNext := True;
+                 WaterfallRun(AArr, AArgs, I + 1, AState);
+               end;
+      LListener.Waterfall(AArgs, LNext);
+      if not LCalledNext then
+        Exit;   { short-circuit: handler vetoed }
     end;
-    Result := not LStop;
-  finally
-    LSnapshot.Free;
+    Inc(I);
   end;
+  AState.ReachedEnd := True;
 end;
 
 end.

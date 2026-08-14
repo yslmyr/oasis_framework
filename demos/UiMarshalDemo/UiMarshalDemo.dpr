@@ -20,6 +20,7 @@
 uses
   System.SysUtils, System.Classes, System.SyncObjs, System.Generics.Collections,
   Oasis.Types in '..\..\src\Oasis.Core\Oasis.Types.pas',
+  Oasis.Spin in '..\..\src\Oasis.Core\Oasis.Spin.pas',
   Oasis.Errors in '..\..\src\Oasis.Core\Oasis.Errors.pas',
   Oasis.Effects in '..\..\src\Oasis.Core\Oasis.Effects.pas',
   Oasis.Services in '..\..\src\Oasis.Core\Oasis.Services.pas',
