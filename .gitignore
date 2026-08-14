@@ -15,6 +15,8 @@
 *.lib
 *.a
 *.o
+# ...but keep the source directory whose name ends in '.Bpl' (not a build file):
+!src/Oasis.Bpl/
 
 # --- RAD Studio intermediate / backup files ---
 *.~
@@ -64,6 +66,10 @@ Thumbs.db
 # --- Local tooling indexes (daofy Delphi knowledge base, etc.) ---
 .delphi-kb/
 .codegraph/
+
+# --- Demo/runtime output files ---
+bpldemo_out.txt
+*_out.txt
 
 # --- OmniThreadLibrary / third-party pulled libs (uncomment if vendored build output) ---
 # thirdparty/**/bin/

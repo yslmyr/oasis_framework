@@ -1,0 +1,26 @@
+﻿package SamplePlugin;
+
+{$ALIGN 8}
+{$RUNONLY}
+
+{ Runtime package plugin. Exports OasisCreatePlugin (defined in SamplePlugin)
+  for the host's TBplPluginLoader to resolve via GetProcAddress. Statically
+  contains its own copy of Oasis.Core (interface dispatch by GUID + vtable keeps
+  the host/BPL boundary safe) and requires the Delphi RTL runtime package. }
+
+requires
+  rtl;
+
+contains
+  SampleContract,
+  SamplePlugin,
+  Oasis.BplContract,
+  Oasis.Plugin,
+  Oasis.Context,
+  Oasis.Events,
+  Oasis.Services,
+  Oasis.Effects,
+  Oasis.Errors,
+  Oasis.Types;
+
+end.
