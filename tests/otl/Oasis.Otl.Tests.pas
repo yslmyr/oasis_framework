@@ -4,7 +4,7 @@ interface
 
 uses
   DUnitX.TestFramework, System.SysUtils, System.SyncObjs,
-  Oasis.Types, Oasis.Errors, Oasis.Effects, Oasis.Events, Oasis.OtlEvents;
+  Oasis.Types, Oasis.Errors, Oasis.Effects, Oasis.Events, Oasis.Context, Oasis.OtlEvents;
 
 type
   [TestFixture]
@@ -24,6 +24,9 @@ type
 
     [Test]
     procedure Bus_Is_IAsyncEventBus_And_Inherits_Sync;
+
+    [Test]
+    procedure Context_Uses_AsyncEventBus_When_Registered;
   end;
 
 implementation
@@ -134,6 +137,35 @@ begin
     Assert.IsTrue(LRan, 'synchronous On/Emit must still work (inherited)');
     LScope.Dispose;
   finally
+  end;
+end;
+
+procedure TOtlEventsTests.Context_Uses_AsyncEventBus_When_Registered;
+var
+  Ctx: IContext;
+  LBus: IAsyncEventBus;
+  LLock: TCriticalSection;
+  LCount: Integer;
+begin
+  OasisRegisterAsyncEventBus;
+  try
+    LCount := 0;
+    LLock := TCriticalSection.Create;
+    try
+      Ctx := TContext.Create('root');
+      Assert.IsTrue(Supports(Ctx.Events, IAsyncEventBus),
+        'context bus must be IAsyncEventBus after registration');
+      LBus := Ctx.Events as IAsyncEventBus;
+      LBus.OnAsync('e', procedure(const A: array of const) begin LLock.Enter; Inc(LCount); LLock.Leave; end);
+      LBus.OnAsync('e', procedure(const A: array of const) begin LLock.Enter; Inc(LCount); LLock.Leave; end);
+      Assert.AreEqual(2, LBus.Parallel('e', []));
+      Assert.AreEqual(2, LCount);
+      Ctx.Dispose;
+    finally
+      LLock.Free;
+    end;
+  finally
+    TContext.SetEventBusFactory(nil);   { restore default so other tests are unaffected }
   end;
 end;
 

@@ -61,6 +61,9 @@ type
     procedure Dispose;
   end;
 
+  TEventBusFactory = reference to function(AOwner: IEffectScope;
+                                           AParent: IEventBus): IEventBus;
+
   TContext = class(TInterfacedObject, IContext)
   strict private
     FName: string;
@@ -74,8 +77,11 @@ type
     FDisposed: Boolean;
     procedure MountUnderFreshFiber(AApply: TProc<IContext>;
                                    AReturned: TFunc<IContext, TDisposer>);
+    function  CreateEventBus(AParent: IEventBus): IEventBus;
   public
     constructor Create(const AName: string; AParent: IContext = nil);
+    class function  EventBusFactory: TEventBusFactory; static;
+    class procedure SetEventBusFactory(AFactory: TEventBusFactory); static;
     destructor Destroy; override;
     function  Parent: IContext;
     function  Name: string;
@@ -93,6 +99,9 @@ type
 
 implementation
 
+var
+  GEventBusFactory: TEventBusFactory;
+
 { TContext }
 
 constructor TContext.Create(const AName: string; AParent: IContext);
@@ -106,9 +115,9 @@ begin
   else
     FServices := TServiceRegistry.Create(nil);
   if AParent <> nil then
-    FEvents := TEventBus.Create(FContextEffects, AParent.Events)
+    FEvents := CreateEventBus(AParent.Events)
   else
-    FEvents := TEventBus.Create(FContextEffects, nil);
+    FEvents := CreateEventBus(nil);
   FFibers := TList<IEffectScope>.Create;
   FChildren := TList<IContext>.Create;
 end;
@@ -119,6 +128,29 @@ begin
   FFibers.Free;
   FChildren.Free;
   inherited Destroy;
+end;
+
+function TContext.CreateEventBus(AParent: IEventBus): IEventBus;
+var
+  LParentBus: IEventBus;
+  LFactory: TEventBusFactory;
+begin
+  LParentBus := AParent;
+  LFactory := GEventBusFactory;
+  if Assigned(LFactory) then
+    Result := LFactory(FContextEffects, LParentBus)
+  else
+    Result := TEventBus.Create(FContextEffects, LParentBus);
+end;
+
+class function TContext.EventBusFactory: TEventBusFactory;
+begin
+  Result := GEventBusFactory;
+end;
+
+class procedure TContext.SetEventBusFactory(AFactory: TEventBusFactory);
+begin
+  GEventBusFactory := AFactory;
 end;
 
 function TContext.Parent: IContext;

@@ -23,7 +23,7 @@ interface
 uses
   System.SysUtils, System.SyncObjs, System.Generics.Collections,
   OtlParallel,
-  Oasis.Types, Oasis.Errors, Oasis.Effects, Oasis.Events;
+  Oasis.Types, Oasis.Errors, Oasis.Effects, Oasis.Events, Oasis.Context;
 
 type
   TAsyncEventHandler = reference to procedure(const AArgs: array of const);
@@ -68,6 +68,11 @@ type
   arrays cannot be captured by anonymous methods). References point into the
   caller's data, which must outlive the copy. }
 function OasisCopyArgs(const A: array of const): TArray<TVarRec>;
+
+{ Install TAsyncEventBus as the default event bus for all subsequently created
+  TContext instances (including forks). Call once at program start, before any
+  context is created; afterwards Supports(Ctx.Events, IAsyncEventBus) is True. }
+procedure OasisRegisterAsyncEventBus;
 
 implementation
 
@@ -270,6 +275,15 @@ begin
   end;
   if LFailed then
     raise EOasisEventError.Create(LMsgs);
+end;
+
+procedure OasisRegisterAsyncEventBus;
+begin
+  TContext.SetEventBusFactory(
+    function(AOwner: IEffectScope; AParent: IEventBus): IEventBus
+    begin
+      Result := TAsyncEventBus.Create(AOwner, AParent);
+    end);
 end;
 
 end.
