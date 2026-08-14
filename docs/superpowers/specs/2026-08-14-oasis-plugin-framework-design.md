@@ -635,3 +635,29 @@ MVP **32/32**（新增：Reload_By_Name×2、级联、配置×3）、OTL 6/6，0
 ### 验证汇总
 
 主套件 **36/36**（新增 UI×2 + 配置×2），OTL 6/6，0 泄漏；`build.cmd` 纳入 `Oasis.UI.dpk` 一键构建 ALL GREEN。
+
+---
+
+## 18. VCL 宿主 Demo（Windows 应用插件管理系统，已实现）
+
+针对"demo 全是控制台、框架作为 Windows app 插件管理系统的能力没有体现"的反馈，补 GUI 落点：
+
+**`demos/VclHostDemo`（HostApp.exe）**——插件管理器主窗口：
+- 左：插件列表（名称/状态 active|PENDING|FAILED）；右：插件贡献的 Tab 页；底部：事件日志
+- 工具栏：Add Settings / Add Clock / Add Greet / Load BPL... / Reload selected / Unload selected
+
+**展示的框架能力（UI 可视化）：**
+1. **插件贡献 UI**：宿主只注册 `IViewHost` 服务（增删 Tab）；插件 `Apply` 中 `ViewHost.Add(self)` + `Effects.AddCleanup(Remove)` —— "可逆副作用"作用于 UI：卸载/级联/重载时插件 Tab 自动消失与回归。
+2. **依赖级联可视化**：卸载 Settings → Greet 列表变 PENDING、其 Tab 消失；重挂 → 自动复活。
+3. **`IUIInvoker` marshaling**：Clock 插件后台线程经 `Queue` 刷新 UI；闭包捕获 refcounted label-sink（接口），卸载后仍在队列中的更新是安全 no-op（防 dangling 控件）。
+4. **BPL 动态加载带 UI**：`samples/VclBplPlugin`（requires rtl/vcl/Oasis.Core）运行期从磁盘加载，给活着的 Windows 应用加一个 Tab。
+5. **单插件 Reload/Unload**：选中列表项按钮操作。
+
+**`/selftest` 无头端到端验证**（写 `vclhost_selftest.txt`，exit 0）：
+`views:4 → after-unload:pending=1,views=2 → after-remount:pending=0,views=4`。
+
+**实现要点（Delphi/VCL 现实）：**
+- 匿名方法不能赋给 `TNotifyEvent`（OnCliick/OnChange）→ 用小类 override（`TPrefixEdit.Change`、`TGreetView.GreetClick`）。
+- 宿主 `-LUrtl -LUvcl`（共享 rtl370/vcl370 运行时包）；运行期 PATH 需 `rtl370.bpl`/`vcl370.bpl`/`Oasis.Core.bpl`（或复制到 exe 旁）。
+- 缺 `Oasis.Core.bpl` 时二次异常会触发 VCL 模态错误框（无头环境即挂起）→ selftest 包 try/except 兜底写 `EXCEPTION:` 后退出。
+- `build.cmd` 纳入宿主与 VCL BPL 插件构建，ALL GREEN。

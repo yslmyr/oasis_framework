@@ -1,0 +1,22 @@
+﻿package VclBplPlugin;
+
+{$ALIGN 8}
+{$RUNONLY}
+
+(* VCL BPL plugin for the host demo: adds a tab to a running Windows app.
+
+  Requires the VCL runtime package plus the Oasis.Core runtime package; the
+  host EXE is built with -LUrtl,vcl so all sides share rtl.bpl/vcl.bpl (class
+  list + control classes). At run time rtl.bpl, vcl.bpl and Oasis.Core.bpl
+  must be on PATH. *)
+
+requires
+  rtl,
+  vcl,
+  Oasis.Core;
+
+contains
+  VclPluginContract,
+  VclBplPluginMain;
+
+end.

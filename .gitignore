@@ -70,6 +70,8 @@ Thumbs.db
 # --- Demo/runtime output files ---
 bpldemo_out.txt
 *_out.txt
+vclhost_selftest.txt
+vclhost_probe.txt
 
 # --- OmniThreadLibrary / third-party pulled libs (uncomment if vendored build output) ---
 # thirdparty/**/bin/

@@ -90,6 +90,11 @@ demos/ConfigDemo/  config-driven assembly: disabled skip, env layers, typed valu
                    (run with no args = base layer; `ConfigDemo production` = env layer)
 demos/WaterfallDemo/ middleware pipeline: logging/auth-veto/rate-limit/handler
 demos/UiMarshalDemo/ background workers -> main-thread rendering via IUIInvoker
+demos/VclHostDemo/  **VCL plugin-manager GUI** - the Windows-app showcase:
+                   plugin list w/ status, plugin-contributed tabs, mount /
+                   unload / reload buttons, Load-BPL-from-disk, event log.
+                   `HostApp.exe /selftest` = headless end-to-end verification
+samples/VclBplPlugin/ VCL BPL plugin adding a tab to the running host app
 docs/superpowers/  design spec + implementation plan
 ```
 
@@ -147,6 +152,33 @@ dcc32 -B -NSWinapi;System;System.Win;Vcl;System.Classes \
 dcc32 -B -NSWinapi;System;System.Win;Vcl;System.Classes -LUrtl BplDemo.dpr
 BplDemo.exe                # writes bpldemo_out.txt: "Hello from BPL, world" / 0/0
 ```
+
+**VCL host demo (plugin-manager GUI)** — the Windows-app showcase. Build via
+`build.cmd` (step `[+]`), or by hand:
+
+```bash
+# host (uses rtl+vcl runtime packages; needs VclPluginContract on the path)
+dcc32 -B -NSWinapi;System;System.Win;Vcl -LUrtl -LUvcl \
+  -U"<repo>/samples/VclBplPlugin" HostApp.dpr
+# VCL BPL plugin (requires rtl + vcl + Oasis.Core packages)
+dcc32 -B -NSWinapi;System;System.Win;Vcl \
+  -U"<repo>/src/Oasis.Core" -U"<repo>/src/Oasis.Bpl" -U"<repo>/bin" -U. \
+  VclBplPlugin.dpk
+```
+
+Run `HostApp.exe` interactively (buttons: add Settings/Clock/Greet plugins,
+load the BPL from disk, reload/unload a selected plugin; watch the Greet tab
+disappear when Settings is unloaded = dependency cascade in the UI), or
+`HostApp.exe /selftest` headless — writes `vclhost_selftest.txt`:
+
+```
+mounted-inproc / mounted-bpl / views:4
+after-unload:pending=1,views=2     <- Settings unloaded: Greet cascade-deactivated
+after-remount:pending=0,views=4    <- Settings back: Greet re-activated, tab returns
+```
+
+Run-time PATH needs `rtl370.bpl`, `vcl370.bpl` (RAD Studio `bin`) and
+`Oasis.Core.bpl` (repo `bin\`) — or copy them next to `HostApp.exe`.
 
 ## A plugin in 30 seconds
 

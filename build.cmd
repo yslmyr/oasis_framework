@@ -70,6 +70,12 @@ echo [6/6] Building BPL host demo (uses rtl.bpl - run it with the Oasis .bpl dir
 pushd "%ROOT%demos\BplDemo" && "%DCC%" -B %NS% -LUrtl BplDemo.dpr || goto :fail
 popd
 
+echo [+] Building VCL host demo (plugin-manager GUI, -LUrtl -LUvcl)...
+pushd "%ROOT%demos\VclHostDemo" && "%DCC%" -B %NS% -LUrtl -LUvcl HostApp.dpr || goto :fail
+popd
+pushd "%ROOT%samples\VclBplPlugin" && "%DCC%" -B %NS% -U"%CORE%" -U"%BPLP%" -U"%BIN%" -U. VclBplPlugin.dpk || goto :fail
+popd
+
 echo.
 echo ALL GREEN - packages in bin\, tests passed, demos built.
 exit /b 0
