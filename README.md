@@ -15,10 +15,16 @@ Oasis brings Cordis's core design ideas to Delphi:
 - **Services** — strongly-typed, GUID-keyed registry with parent-chain lookup
   and child-shadowing (`Ctx.Services.Register(IConfig, inst)` /
   `Ctx.Services.Get(IConfig) as IConfig`).
-- **Events** — `Emit` / `Serial` / `Waterfall` (sync) with per-listener fault
-  isolation and bubbling; `Waterfall` short-circuits when a listener skips
-  `Next`. **Async** `Parallel` / `SerialAsync` (concurrent / sequential on the
-  OmniThreadLibrary pool) via the optional `Oasis.Otl` package.
+- **Events** — `Emit` / `Serial` / `Waterfall` / `Bail` (first truthy result
+  wins and stops the chain) with per-listener fault isolation and bubbling;
+  `Waterfall` short-circuits when a listener skips `Next`. **Async**
+  `Parallel` / `SerialAsync` (concurrent / sequential on the OmniThreadLibrary
+  pool) via the optional `Oasis.Otl` package. **Strongly-typed** events via
+  `TOasisEvent<TPayload>` (compile-time payload safety both ends).
+- **Fiber states** — `PluginState(name)` exposes the Cordis lifecycle machine:
+  `fsPending` (Host: dependency not yet available) → `fsLoading` → `fsActive`
+  → `fsUnloading` → `fsDisposed`, plus `fsFailed` for Apply-time failures
+  (queryable; the failed entry is kept).
 - **Dependency activation** — a plugin declares the service GUIDs it needs
   (`Inject`); it activates as soon as they are resolvable. Mount order does not
   matter — the host rescans the pending queue on every service registration.
@@ -56,6 +62,7 @@ Oasis brings Cordis's core design ideas to Delphi:
 | Hardening | Apply-failure visibility (`FailedPlugins` + `EV_HOST_PLUGIN_FAILED`); runtime packages (`Oasis.Core/.Hosting/.Otl/.Bpl/.UI.dpk`) + one-click `build.cmd` | **Done** |
 | Roadmap 3 | `Oasis.UI` — `IUIInvoker` (`Queue`/`Sync`) main-thread marshaling bridge (RTL-only, VCL/FMX-agnostic) | **Done** — tests |
 | Roadmap 4b | Config env layers (base + override) + typed readers (`Int`/`Bool`/`Float`) | **Done** — tests |
+| Parity | `bail` dispatch (first truthy wins); strongly-typed `On<TPayload>`; `Fiber.State` machine (`PluginState`) | **Done** — 44/44 tests |
 | Future | — | — |
 
 ## Requirements
