@@ -53,6 +53,14 @@ pushd "%ROOT%demos\ConsoleDemo" && "%DCC%" -B ConsoleDemo.dpr || goto :fail
 popd
 pushd "%ROOT%demos\OtlDemo" && "%DCC%" -B %NS% -U"%OTL%" -U"%OTL%\src" OasisOtlDemo.dpr || goto :fail
 popd
+pushd "%ROOT%demos\CascadeDemo" && "%DCC%" -B CascadeDemo.dpr || goto :fail
+popd
+pushd "%ROOT%demos\ConfigDemo" && "%DCC%" -B ConfigDemo.dpr || goto :fail
+popd
+pushd "%ROOT%demos\WaterfallDemo" && "%DCC%" -B WaterfallDemo.dpr || goto :fail
+popd
+pushd "%ROOT%demos\UiMarshalDemo" && "%DCC%" -B UiMarshalDemo.dpr || goto :fail
+popd
 
 echo [5/6] Building BPL sample plugin (requires Oasis.Core + Oasis.Bpl)...
 pushd "%ROOT%samples\BplPlugin" && "%DCC%" -B %NS% -U"%CORE%" -U"%HOSTING%" -U"%BPLP%" -U. SamplePlugin.dpk || goto :fail

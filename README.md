@@ -85,6 +85,11 @@ tests/otl/         OTL test runner (Oasis.Otl.Tests.dpr — needs OmniThreadLibr
 demos/ConsoleDemo/ 3-plugin dependency chain + lifecycle event (OTL-free)
 demos/OtlDemo/     async Parallel demo (needs OmniThreadLibrary)
 demos/BplDemo/     dynamic BPL-loading demo (needs rtl.bpl on PATH; writes bpldemo_out.txt)
+demos/CascadeDemo/ dependency cascade + per-plugin Reload/Unload (4 phases)
+demos/ConfigDemo/  config-driven assembly: disabled skip, env layers, typed values
+                   (run with no args = base layer; `ConfigDemo production` = env layer)
+demos/WaterfallDemo/ middleware pipeline: logging/auth-veto/rate-limit/handler
+demos/UiMarshalDemo/ background workers -> main-thread rendering via IUIInvoker
 docs/superpowers/  design spec + implementation plan
 ```
 
