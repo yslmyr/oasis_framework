@@ -579,3 +579,35 @@ Reload():
 - **children (Fork)**：reload 不递归子上下文。
 
 **验证**：`Oasis.Context.Tests` 新增 `Reload_Re_Runs_And_Tears_Down_Effects_And_Listeners`——reload 后 Apply 计数翻倍、effect 被逆序清理、事件监听未被重复（emit 仅 +1）。MVP 26/26、OTL 6/6 全绿。
+
+---
+
+## 16. 评估路线图实现笔记（per-plugin reload / 依赖级联 / JSON 配置，已实现）
+
+对四项评估特性按建议顺序推进：#1 → #2 → #4 已实现合并；#3（UI marshaling）按评估结论**暂缓**（无 GUI 目标场景）。
+
+### #1 单插件级 Reload(name)
+
+- 监听器归属修正：`MountUnderFreshFiber` 在 Apply 期间把事件总线 owner 指向该 fiber（`SetOwnerScope(fiber)`），结束后还原。销毁单个 fiber 即精确移除该插件的监听——单插件 unload/reload 从"只有全量销毁才正确"变为普遍正确。
+- `TPluginEntry` 增加 `Name`；`IContext/TContext` 增加 `Reload(name): Boolean`（按名定位→销毁 fiber→重挂）与 `Unload(name): Boolean`（销毁并移除，不重挂）。
+
+### #2 依赖失效级联
+
+- `Oasis.Services`：`Unregister(GUID)`（触发 `OnServiceRemoved`）、`SetOwnerScope`、注册时向 owner scope 挂自动注销 cleanup——闭包捕获**注册时的实例**，`RemoveIfSame` 保证只移除仍是自己那一条（不误删后来者的覆盖）。
+- `Oasis.Context`：Apply 期间服务注册表 owner 同样指向 fiber（与总线对称）；provider 卸载/重载自动注销其服务。
+- `Oasis.Host`：`FActive` 跟踪已激活插件；`OnServiceRemoved` 把 Inject 了该 GUID 的已激活插件停用（`Unload`→其服务再注销→处理器重入形成更深层级联）并回挂 pending；依赖回归时经既有 rescan 自动再激活。停用路径在 teardown 期间有 `FStarted` 守卫。
+- 级联测试：provider 卸载 → 消费者 cleanup 执行 + 回队 + 服务消失；provider 重挂 → 消费者自动再激活。
+
+### #4 配置加载器（JSON，cordis.yml 式）
+
+- `Oasis.Config`：`IOasisConfig`（`Disabled`/`Value`/`HasValue`）+ `TJsonConfigPlugin`。schema：`{"plugins":{"<name>":{"disabled":bool,"config":{k:v}}}}`。用 `System.JSON`（RTL，不引 YAML 三方依赖）；v1 值为字符串；缺文件在 Apply 抛 `EOasisConfigError`——在 Context 故障隔离下表现为"服务未注册 + 消费者停在 pending"（可见，不会带默认值静默运行，测试锁定该语义）。
+- `THost.TryMount(plugin): Boolean`：注册了 `IOasisConfig` 且该插件 `disabled` 时返回 False 并跳过挂载（cordis.yml `disabled` 语义）。
+
+### 验证汇总
+
+MVP **32/32**（新增：Reload_By_Name×2、级联、配置×3）、OTL 6/6，0 泄漏。
+
+### 剩余（未做，已评估）
+
+- **#3 UI marshaling 桥**：暂缓。无 GUI 目标场景；实现成本低（本质 `TThread.Queue` 封装），需要时按 spec §6.2 线程边界一节建立 `Oasis.UI` 可选包即可。
+- 配置分层/覆盖（base + 环境特定）、非字符串值绑定。

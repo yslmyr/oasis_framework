@@ -25,7 +25,15 @@ Oasis brings Cordis's core design ideas to Delphi:
 - **Loaders** — pluggable `IPluginLoader` abstraction: in-process (`TInProcPluginLoader`)
   and dynamic BPL (`TBplPluginLoader`, phase 3) with the same contract.
 - **Reload** — `IContext.Reload` (phase 4): tears down every plugin's effects +
-  listeners and re-runs all `Apply` calls (hot-restart the context).
+  listeners and re-runs all `Apply` calls (hot-restart the context);
+  `Reload(name)` / `Unload(name)` do it for a single plugin.
+- **Dependency cascade** — services registered during Apply are fiber-owned:
+  unloading a provider unregisters its services, the Host deactivates the
+  affected consumers (re-queued), and they re-activate when the dependency
+  returns.
+- **Config** — `TJsonConfigPlugin` registers an `IOasisConfig` service
+  (`disabled` flag + per-plugin values); `Host.TryMount` skips disabled plugins
+  (cordis.yml semantics, JSON edition).
 
 ## Status
 
@@ -34,8 +42,11 @@ Oasis brings Cordis's core design ideas to Delphi:
 | MVP | `Oasis.Core` + `Oasis.Hosting` (in-process loader + `THost`) | **Done** — 25/25 tests, demo runs |
 | Phase 2 | `Oasis.Otl` — async `Parallel`/`SerialAsync` via OTL | **Done** — 6/6 tests, async demo runs |
 | Phase 3 | `Oasis.Bpl` — dynamic BPL loading | **Done** — sample BPL loads, demo runs |
-| Phase 4 | `Context.Reload` hot-reload | **Done** — 26/26 tests |
-| Future | per-plugin reload + dependency deactivation cascade | Evaluated |
+| Phase 4 | `Context.Reload` hot-reload | **Done** — tests |
+| Roadmap 1 | per-plugin `Reload(name)` / `Unload(name)`, fiber-owned listeners | **Done** — tests |
+| Roadmap 2 | dependency deactivation cascade (`Unregister`/`OnServiceRemoved`) | **Done** — tests |
+| Roadmap 4 | JSON config plugin + `Host.TryMount` (`disabled` support) | **Done** — tests |
+| Future | UI thread marshaling bridge (deferred — no GUI target yet); config layers/overrides | Evaluated |
 
 ## Requirements
 
@@ -48,7 +59,8 @@ Oasis brings Cordis's core design ideas to Delphi:
 src/
   Oasis.Core/      zero-dependency core: Types, Errors, Effects, Services,
                    Events, Context (IContext+IPlugin+TContext), Plugin base
-  Oasis.Hosting/   IPluginLoader + TInProcPluginLoader, THost
+  Oasis.Hosting/   IPluginLoader + TInProcPluginLoader, THost, Oasis.Config
+                   (JSON config plugin + TryMount)
   Oasis.Otl/       (phase 2) IAsyncEventBus + TAsyncEventBus — Parallel/SerialAsync
                    via OmniThreadLibrary; inherits TEventBus
   Oasis.Bpl/       (phase 3) TBplPluginLoader + IOasisPluginFactory contract
