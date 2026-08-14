@@ -67,6 +67,14 @@ begin
   FActive := TList<IPlugin>.Create;
   FRoot.Services.SetOnServiceAdded(OnServiceAdded);
   FRoot.Services.SetOnServiceRemoved(OnServiceRemoved);
+  { TContext.Plugin isolates Apply failures (swallows + rolls back); this hook
+    is how the failure becomes visible: FailedPlugins + EV_HOST_PLUGIN_FAILED. }
+  FRoot.SetOnPluginFailed(
+    procedure(const APluginName, AMessage: string)
+    begin
+      FFailed.Add(APluginName);
+      try FRoot.Events.Emit(EV_HOST_PLUGIN_FAILED, [APluginName, AMessage]); except end;
+    end);
 end;
 
 destructor THost.Destroy;

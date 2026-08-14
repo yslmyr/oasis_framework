@@ -27,6 +27,9 @@ uses
 type
   IContext = interface;   // forward: IPlugin.Apply references IContext
 
+  TPluginFailedEvent = reference to procedure(const APluginName: string;
+                                              const AMessage: string);
+
   IPlugin = interface
     ['{E5F6A7B8-C9D0-4E1F-2A3B-4C5D6E7F8091}']
     function PluginName: string;
@@ -68,6 +71,11 @@ type
     { Unmount ONE plugin: dispose its fiber (effects + listeners + services) and
       drop it. Returns False if no mounted plugin has that name. }
     function  Unload(const AName: string): Boolean;
+
+    { Fault-visibility hook: fired when a plugin's Apply raises (after the fiber
+      rollback; the exception itself stays swallowed - fault isolation). The Host
+      installs this to record FailedPlugins and emit its failure event. }
+    procedure SetOnPluginFailed(AHandler: TPluginFailedEvent);
   end;
 
   TEventBusFactory = reference to function(AOwner: IEffectScope;
@@ -91,6 +99,7 @@ type
     FChildren: TList<IContext>;
     FActiveFiber: IEffectScope;
     FDisposed: Boolean;
+    FOnPluginFailed: TPluginFailedEvent;
     procedure MountUnderFreshFiber(const AName: string; AApply: TProc<IContext>;
                                    AReturned: TFunc<IContext, TDisposer>);
     function  CreateEventBus(AParent: IEventBus): IEventBus;
@@ -114,6 +123,7 @@ type
     procedure Reload; overload;
     function  Reload(const AName: string): Boolean; overload;
     function  Unload(const AName: string): Boolean;
+    procedure SetOnPluginFailed(AHandler: TPluginFailedEvent);
   end;
 
 implementation
@@ -170,6 +180,11 @@ end;
 class procedure TContext.SetEventBusFactory(AFactory: TEventBusFactory);
 begin
   GEventBusFactory := AFactory;
+end;
+
+procedure TContext.SetOnPluginFailed(AHandler: TPluginFailedEvent);
+begin
+  FOnPluginFailed := AHandler;
 end;
 
 function TContext.Parent: IContext;
@@ -240,13 +255,19 @@ begin
       end;
     except
       { Fault isolation: roll back this fiber's partial effects and swallow the
-        exception. The Host surfaces plugin failures via events. }
-      try
-        LFiber.Dispose;
-      except
-        on EOasisDisposeError do ;
+        exception, then surface it through the optional failure hook (the Host
+        records FailedPlugins and emits EV_HOST_PLUGIN_FAILED). }
+      on E: Exception do
+      begin
+        try
+          LFiber.Dispose;
+        except
+          on EOasisDisposeError do ;
+        end;
+        if Assigned(FOnPluginFailed) then
+          try FOnPluginFailed(AName, E.Message); except end;
+        Exit;   { failed plugin is not kept mounted }
       end;
-      Exit;
     end;
   finally
     FActiveFiber := LPrev;

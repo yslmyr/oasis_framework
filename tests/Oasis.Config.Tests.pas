@@ -100,18 +100,25 @@ procedure TConfigTests.Missing_File_Fails_The_Plugin;
 var
   Host: THost;
   LConsumer: TNamedPlugin;
+  LFailEvent: Integer;
 begin
-  { TContext.Plugin isolates Apply failures (swallows + rolls back), so a bad
-    config file surfaces as: no IOasisConfig registered, and consumers that
-    inject it stay PENDING (visible) instead of running on defaults. }
+  { A bad config file now surfaces BOTH ways: FailedPlugins records the name
+    (via the OnPluginFailed hook) + EV_HOST_PLUGIN_FAILED fires, AND consumers
+    that inject IOasisConfig stay PENDING instead of running on defaults. }
   Host := THost.Create;
   try
+    LFailEvent := 0;
+    Host.Root.Events.On(EV_HOST_PLUGIN_FAILED,
+      procedure(const A: array of const) begin Inc(LFailEvent); end);
     LConsumer := TNamedPlugin.Create('needs-config');
     LConsumer.AddInject(IOasisConfig);
     Host.Mount(LConsumer);
     Host.Mount(TJsonConfigPlugin.Create('Z:\no\such\file.json'));
     Host.Start;
     Assert.IsFalse(Host.Root.Services.Has(IOasisConfig));
+    Assert.AreEqual(1, Length(Host.FailedPlugins));
+    Assert.AreEqual('json-config', Host.FailedPlugins[0]);
+    Assert.AreEqual(1, LFailEvent);
     Assert.AreEqual(1, Length(Host.PendingPlugins));
     Assert.AreEqual('needs-config', Host.PendingPlugins[0]);
   finally
