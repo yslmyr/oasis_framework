@@ -50,6 +50,11 @@ type
     procedure Shutdown;
     function  PendingPlugins: TArray<string>;
     function  FailedPlugins: TArray<string>;
+    { Fiber state machine (Cordis) across BOTH layers: a plugin waiting for its
+      dependencies is fsPending (Host-level queue); everything else comes from
+      the root context (fsLoading/fsActive/fsUnloading/fsFailed; fsDisposed for
+      unknown or removed names). }
+    function  PluginState(const APluginName: string): TFiberState;
   end;
 
 implementation
@@ -323,6 +328,18 @@ begin
   finally
     FPendingLock.Leave;
   end;
+end;
+
+function THost.PluginState(const APluginName: string): TFiberState;
+var
+  LPending: TArray<string>;
+  I: Integer;
+begin
+  LPending := PendingPlugins;
+  for I := 0 to Length(LPending) - 1 do
+    if SameText(LPending[I], APluginName) then
+      Exit(fsPending);
+  Result := FRoot.PluginState(APluginName);
 end;
 
 function THost.FailedPlugins: TArray<string>;

@@ -19,7 +19,7 @@
 interface
 
 uses
-  System.SysUtils, System.Generics.Collections,
+  System.SysUtils, System.Rtti, System.Generics.Collections,
   Oasis.Types, Oasis.Errors, Oasis.Effects, Oasis.Spin;
 
 type
@@ -28,11 +28,22 @@ type
     function On(const AEvent: TEventKey; AHandler: TEventHandler): TDisposer; overload;
     function OnWaterfall(const AEvent: TEventKey;
                          AHandler: TWaterfallHandler): TDisposer; overload;
+    function OnBail(const AEvent: TEventKey;
+                    AHandler: TBailHandler): TDisposer; overload;
+    function OnValue(const AEvent: TEventKey;
+                     AHandler: TValueHandler): TDisposer; overload;
 
     procedure Emit(const AEvent: TEventKey; const AArgs: array of const);
     procedure Serial(const AEvent: TEventKey; const AArgs: array of const);
     { Returns True if the chain reached the end (no veto); False if short-circuited. }
     function  Waterfall(const AEvent: TEventKey; const AArgs: array of const): Boolean;
+    { bail: run bail listeners in registration order; the first TRUTHY result
+      (OasisIsTruthy) wins, the chain stops and the value is returned. When no
+      listener returns a truthy value, TValue.Empty is returned. }
+    function  Bail(const AEvent: TEventKey; const AArgs: array of const): TValue;
+    { Typed-payload dispatch: invokes OnValue listeners with the payload as a
+      TValue (bridge for the strongly-typed On<TPayload> wrapper). }
+    procedure EmitValue(const AEvent: TEventKey; const AValue: TValue);
     { Remove the listener registered under AToken for AEvent (idempotent). }
     procedure RemoveListener(const AEvent: TEventKey; AToken: Integer);
     { Reassign the scope that owns auto-unsubscribe cleanups (used by reload to
@@ -42,12 +53,14 @@ type
 
   TEventBus = class(TInterfacedObject, IEventBus)
   strict private type
-    TListenerKind = (lkEmit, lkWaterfall);
+    TListenerKind = (lkEmit, lkWaterfall, lkBail, lkValue);
     TListener = record
       Token: Integer;
       Kind: TListenerKind;
       Emit: TEventHandler;
       Waterfall: TWaterfallHandler;
+      Bail: TBailHandler;
+      Value: TValueHandler;
     end;
     TListenerArray = TArray<TListener>;
     { heap state so anonymous Next callbacks can capture + mutate it (var
@@ -72,9 +85,15 @@ type
     function On(const AEvent: TEventKey; AHandler: TEventHandler): TDisposer; overload;
     function OnWaterfall(const AEvent: TEventKey;
                          AHandler: TWaterfallHandler): TDisposer; overload;
+    function OnBail(const AEvent: TEventKey;
+                    AHandler: TBailHandler): TDisposer; overload;
+    function OnValue(const AEvent: TEventKey;
+                     AHandler: TValueHandler): TDisposer; overload;
     procedure Emit(const AEvent: TEventKey; const AArgs: array of const);
     procedure Serial(const AEvent: TEventKey; const AArgs: array of const);
     function  Waterfall(const AEvent: TEventKey; const AArgs: array of const): Boolean;
+    function  Bail(const AEvent: TEventKey; const AArgs: array of const): TValue;
+    procedure EmitValue(const AEvent: TEventKey; const AValue: TValue);
     procedure RemoveListener(const AEvent: TEventKey; AToken: Integer);
     procedure SetOwnerScope(AScope: IEffectScope); virtual;
   end;
@@ -170,6 +189,116 @@ begin
       end);
   end;
   Result := nil;
+end;
+
+function TEventBus.OnBail(const AEvent: TEventKey;
+  AHandler: TBailHandler): TDisposer;
+var
+  LListener: TListener;
+  LToken: Integer;
+  LSelf: IEventBus;
+begin
+  LListener.Token := 0;
+  LListener.Kind := lkBail;
+  LListener.Emit := nil;
+  LListener.Waterfall := nil;
+  LListener.Bail := AHandler;
+  LListener.Value := nil;
+  LToken := AppendListener(AEvent, LListener);
+  if FOwner <> nil then
+  begin
+    LSelf := Self;
+    FOwner.AddCleanup(
+      procedure
+      begin
+        LSelf.RemoveListener(AEvent, LToken);
+      end);
+  end;
+  Result := nil;
+end;
+
+function TEventBus.OnValue(const AEvent: TEventKey;
+  AHandler: TValueHandler): TDisposer;
+var
+  LListener: TListener;
+  LToken: Integer;
+  LSelf: IEventBus;
+begin
+  LListener.Token := 0;
+  LListener.Kind := lkValue;
+  LListener.Emit := nil;
+  LListener.Waterfall := nil;
+  LListener.Bail := nil;
+  LListener.Value := AHandler;
+  LToken := AppendListener(AEvent, LListener);
+  if FOwner <> nil then
+  begin
+    LSelf := Self;
+    FOwner.AddCleanup(
+      procedure
+      begin
+        LSelf.RemoveListener(AEvent, LToken);
+      end);
+  end;
+  Result := nil;
+end;
+
+function TEventBus.Bail(const AEvent: TEventKey;
+  const AArgs: array of const): TValue;
+var
+  LArr: TListenerArray;
+  LIndex: Integer;
+begin
+  Result := TValue.Empty;
+  FLock.Enter;
+  try
+    if not FListeners.TryGetValue(AEvent, LArr) then
+      LArr := nil;
+  finally
+    FLock.Leave;
+  end;
+  for LIndex := 0 to High(LArr) do
+    if LArr[LIndex].Kind = lkBail then
+    begin
+      Result := LArr[LIndex].Bail(AArgs);
+      if OasisIsTruthy(Result) then
+        Exit;   { first truthy result wins - stop the chain }
+    end;
+  if FParent <> nil then
+    Result := FParent.Bail(AEvent, AArgs);
+end;
+
+procedure TEventBus.EmitValue(const AEvent: TEventKey; const AValue: TValue);
+var
+  LArr: TListenerArray;
+  LListener: TListener;
+  LErrors: TArray<string>;
+  LFailed: Boolean;
+begin
+  FLock.Enter;
+  try
+    if not FListeners.TryGetValue(AEvent, LArr) then
+      LArr := nil;
+  finally
+    FLock.Leave;
+  end;
+  LFailed := False;
+  for LListener in LArr do
+    if LListener.Kind = lkValue then
+    try
+      LListener.Value(AValue);
+    except
+      on E: Exception do
+      begin
+        LFailed := True;
+        SetLength(LErrors, Length(LErrors) + 1);
+        LErrors[High(LErrors)] := E.Message;
+      end;
+    end;
+  if FParent <> nil then
+    FParent.EmitValue(AEvent, AValue);
+  if LFailed then
+    raise EOasisEventError.Create(LErrors);
 end;
 
 procedure TEventBus.RemoveListener(const AEvent: TEventKey; AToken: Integer);

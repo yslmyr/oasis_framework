@@ -689,3 +689,30 @@ MVP **32/32**（新增：Reload_By_Name×2、级联、配置×3）、OTL 6/6，0
 - **同一键上海量追加是 O(n²)**：copy-on-write 每次追加重建数组。插件框架实际场景每键监听器是个位数（分发热路径），该权衡正确；若未来需要海量同键注册，可加"批量提交"API。
 - **Waterfall 每次调用有一次小分配**（args 拷入 `TArray<TVarRec>`，开放数组不可被闭包捕获——Delphi 语言限制，重构为类方法递归 + 堆状态对象后引入）。
 - 顺手修复：`On`/`OnWaterfall` 退订闭包此前捕获裸 `Self`（潜伏 use-after-free），改为捕获 `IEventBus` 接口引用（与 `OnAsync` 既有模式一致，环由 `Dispose` 断开）。
+
+---
+
+## 20. 补齐三项未实现功能（bail / 强类型事件 / fiber 状态机，已实现）
+
+对照 Cordis 完整版审计出的 3 个缺口，全部落地：
+
+### #1 `bail` 派发模式（Cordis 完整版第五种模式）
+
+- `Oasis.Types`：`TBailHandler = reference to function(args): TValue` + `OasisIsTruthy`（Cordis 真值语义：非空、非 False、非 nil 对象/接口）。
+- `IEventBus.OnBail(event, handler)` + `Bail(event, args): TValue`：按注册顺序跑 bail 监听器，**首个真值返回胜出并停止链**；全假返回 `TValue.Empty`；沿 fork 链冒泡。复用不可变监听数组（lkBail 槽位）与 token 自动退订。
+
+### #2 强类型 `On<TPayload>`（spec §12 原排除项）
+
+- 总线新增 `OnValue(event, TValueHandler)` / `EmitValue(event, TValue)`（TValue 载荷槽位，lkValue）。
+- `Oasis.TypedEvents` 单元：`TOasisEvent<TPayload>` 泛型记录——`Subscribe(bus, TProc<TPayload>)` / `Emit(bus, TPayload)`，在 API 边界做 TValue 装箱/拆箱，**两端编译期类型安全**（Delphi 接口不能有泛型方法，故为记录包装而非接口方法）。监听器隔离/自动退订/冒泡全部继承自底层总线。支持 TValue 可承载的一切（int/float/string/enum/record/class/interface）。
+
+### #3 fiber 状态机显式暴露
+
+- `Oasis.Types`：`TFiberState = (fsPending, fsLoading, fsActive, fsUnloading, fsFailed, fsDisposed)`。
+- `TContext.PluginState(name)`：`TPluginEntry` 增加 `State` 字段；挂载前登记（fsLoading）→ 成功 fsActive / 失败 **fsFailed（条目保留、Fiber=nil，可查询）**；Dispose/Unload 期间 fsUnloading；未挂载/已移除 → fsDisposed；Reload 重挂后回到 fsActive。
+- `THost.PluginState(name)`：跨两层——依赖未满足的插件是 Host 级 **fsPending**（待激活队列），其余委托 root context。
+- 附带行为变更：失败插件的条目不再丢弃（此前 PluginState 无从查询失败者）；Context.Dispose 跳过已回滚的 nil fiber。
+
+### 验证
+
+主套件 **44/44**（新增 8 项：bail×3 —— 真值胜出停止链 / 全假返回 Empty / 冒泡；typed×2 —— record 载荷往返 / 作用域销毁自动退订；states×3 —— active→failed→disposed 全程 / Host pending / reload 回 active），OTL 6/6，`build.cmd` ALL GREEN。

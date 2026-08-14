@@ -11,6 +11,7 @@ contains
   Oasis.Types,
   Oasis.Errors,
   Oasis.Spin,
+  Oasis.TypedEvents,
   Oasis.Effects,
   Oasis.Services,
   Oasis.Events,

@@ -10,6 +10,7 @@ uses
   Oasis.Types in '..\src\Oasis.Core\Oasis.Types.pas',
   Oasis.Errors in '..\src\Oasis.Core\Oasis.Errors.pas',
   Oasis.Spin in '..\src\Oasis.Core\Oasis.Spin.pas',
+  Oasis.TypedEvents in '..\src\Oasis.Core\Oasis.TypedEvents.pas',
   Oasis.Effects in '..\src\Oasis.Core\Oasis.Effects.pas',
   Oasis.Services in '..\src\Oasis.Core\Oasis.Services.pas',
   Oasis.Events in '..\src\Oasis.Core\Oasis.Events.pas',
@@ -25,7 +26,8 @@ uses
   Oasis.Hosting.Tests in 'Oasis.Hosting.Tests.pas',
   Oasis.Config.Tests in 'Oasis.Config.Tests.pas',
   Oasis.UI in '..\src\Oasis.UI\Oasis.UI.pas',
-  Oasis.UI.Tests in 'Oasis.UI.Tests.pas';
+  Oasis.UI.Tests in 'Oasis.UI.Tests.pas',
+  Oasis.Parity.Tests in 'Oasis.Parity.Tests.pas';
 
 var
   LRunner: ITestRunner;

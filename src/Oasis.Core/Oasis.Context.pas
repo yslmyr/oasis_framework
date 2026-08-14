@@ -76,6 +76,12 @@ type
       rollback; the exception itself stays swallowed - fault isolation). The Host
       installs this to record FailedPlugins and emit its failure event. }
     procedure SetOnPluginFailed(AHandler: TPluginFailedEvent);
+
+    { Fiber state machine (Cordis): the lifecycle state of the named plugin.
+      fsLoading/fsActive/fsUnloading/fsFailed for mounted plugins; fsDisposed for
+      unknown or removed names. (fsPending is Host-level: a plugin waiting for
+      its dependencies is not mounted yet - THost.PluginState covers it.) }
+    function  PluginState(const AName: string): TFiberState;
   end;
 
   TEventBusFactory = reference to function(AOwner: IEffectScope;
@@ -88,6 +94,7 @@ type
       Apply: TProc<IContext>;
       Returned: TFunc<IContext, TDisposer>;
       Fiber: IEffectScope;
+      State: TFiberState;
     end;
   strict private
     FName: string;
@@ -124,6 +131,7 @@ type
     function  Reload(const AName: string): Boolean; overload;
     function  Unload(const AName: string): Boolean;
     procedure SetOnPluginFailed(AHandler: TPluginFailedEvent);
+    function  PluginState(const AName: string): TFiberState;
   end;
 
 implementation
@@ -232,8 +240,16 @@ var
   LPrev: IEffectScope;
   LDisp: TDisposer;
   LEntry: TPluginEntry;
+  LIndex: Integer;
 begin
   LFiber := TEffectScope.Create;
+  LEntry.Name := AName;
+  LEntry.Apply := AApply;
+  LEntry.Returned := AReturned;
+  LEntry.Fiber := LFiber;
+  LEntry.State := fsLoading;
+  FPlugins.Add(LEntry);        { registered up-front so PluginState sees fsLoading }
+  LIndex := FPlugins.Count - 1;
   LPrev := FActiveFiber;        // save (nested mounts restore it)
   FActiveFiber := LFiber;
   { While Apply runs, the event bus's owner is this fiber: listeners the plugin
@@ -256,7 +272,9 @@ begin
     except
       { Fault isolation: roll back this fiber's partial effects and swallow the
         exception, then surface it through the optional failure hook (the Host
-        records FailedPlugins and emits EV_HOST_PLUGIN_FAILED). }
+        records FailedPlugins and emits EV_HOST_PLUGIN_FAILED). The entry is
+        KEPT with State=fsFailed and Fiber=nil (already disposed, owns nothing)
+        so PluginState can report it. }
       on E: Exception do
       begin
         try
@@ -264,9 +282,11 @@ begin
         except
           on EOasisDisposeError do ;
         end;
+        FPlugins.List[LIndex].Fiber := nil;
+        FPlugins.List[LIndex].State := fsFailed;
         if Assigned(FOnPluginFailed) then
           try FOnPluginFailed(AName, E.Message); except end;
-        Exit;   { failed plugin is not kept mounted }
+        Exit;   { failed plugin keeps no side-effects }
       end;
     end;
   finally
@@ -274,11 +294,7 @@ begin
     FServices.SetOwnerScope(Effects); // ditto for service registrations
     FEvents.SetOwnerScope(Effects);  // back to the enclosing active scope
   end;
-  LEntry.Name := AName;
-  LEntry.Apply := AApply;
-  LEntry.Returned := AReturned;
-  LEntry.Fiber := LFiber;
-  FPlugins.Add(LEntry);
+  FPlugins.List[LIndex].State := fsActive;
 end;
 procedure TContext.Plugin(APlugin: IPlugin);
 var
@@ -348,15 +364,19 @@ begin
   end;
   FChildren.Clear;
   for I := FPlugins.Count - 1 downto 0 do
-  try
-    FPlugins[I].Fiber.Dispose;
-  except
-    on E: Exception do
-    begin
-      LFailed := True;
-      SetLength(LMsgs, Length(LMsgs) + 1);
-      LMsgs[High(LMsgs)] := E.Message;
-    end;
+  begin
+    FPlugins.List[I].State := fsUnloading;
+    if FPlugins[I].Fiber <> nil then
+      try
+        FPlugins[I].Fiber.Dispose;
+      except
+        on E: Exception do
+        begin
+          LFailed := True;
+          SetLength(LMsgs, Length(LMsgs) + 1);
+          LMsgs[High(LMsgs)] := E.Message;
+        end;
+      end;
   end;
   FPlugins.Clear;
 
@@ -446,11 +466,15 @@ begin
       FPlugins.Delete(I);
       { Dispose removes this plugin's effects AND its event listeners (they are
         fiber-owned since Apply ran with the bus owner set to the fiber). A
-        cleanup raising does not stop the remount (fault isolation). }
-      try
-        LEntry.Fiber.Dispose;
-      except
-        on EOasisDisposeError do ;
+        cleanup raising does not stop the remount (fault isolation). A failed
+        entry (Fiber=nil, already rolled back) skips straight to the remount. }
+      if LEntry.Fiber <> nil then
+      begin
+        try
+          LEntry.Fiber.Dispose;
+        except
+          on EOasisDisposeError do ;
+        end;
       end;
       MountUnderFreshFiber(LEntry.Name, LEntry.Apply, LEntry.Returned);
       Exit(True);
@@ -472,14 +496,30 @@ begin
       FPlugins.Delete(I);
       { Fiber disposal rolls back the plugin's effects + listeners and now also
         unregisters its fiber-owned services (firing OnServiceRemoved, which the
-        Host uses to deactivate dependents). The entry is dropped, NOT remounted. }
-      try
-        LEntry.Fiber.Dispose;
-      except
-        on EOasisDisposeError do ;
+        Host uses to deactivate dependents). The entry is dropped, NOT remounted;
+        afterwards PluginState reports fsDisposed. Failed entries (Fiber=nil)
+        have nothing left to dispose. }
+      if LEntry.Fiber <> nil then
+      begin
+        try
+          LEntry.Fiber.Dispose;
+        except
+          on EOasisDisposeError do ;
+        end;
       end;
       Exit(True);
     end;
+end;
+
+function TContext.PluginState(const AName: string): TFiberState;
+var
+  I: Integer;
+begin
+  { last matching entry wins (Reload re-adds under the same name) }
+  Result := fsDisposed;
+  for I := 0 to FPlugins.Count - 1 do
+    if SameText(FPlugins[I].Name, AName) then
+      Result := FPlugins[I].State;
 end;
 
 end.
