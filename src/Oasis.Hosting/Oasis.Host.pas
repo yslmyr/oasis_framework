@@ -27,11 +27,13 @@ type
     FPending: TList<IPlugin>;
     FPendingLock: TCriticalSection;
     FFailed: TList<string>;
+    FActive: TList<IPlugin>;
     FStarted: Boolean;
     function  DepsSatisfied(APlugin: IPlugin): Boolean;
     procedure DoActivate(APlugin: IPlugin);
     procedure RescanPending;
     procedure OnServiceAdded(const AGUID: TGUID);
+    procedure OnServiceRemoved(const AGUID: TGUID);
     function  ResolvePlugin(const ASource: string): IPlugin;
   public
     constructor Create;
@@ -58,12 +60,15 @@ begin
   FPending := TList<IPlugin>.Create;
   FPendingLock := TCriticalSection.Create;
   FFailed := TList<string>.Create;
+  FActive := TList<IPlugin>.Create;
   FRoot.Services.SetOnServiceAdded(OnServiceAdded);
+  FRoot.Services.SetOnServiceRemoved(OnServiceRemoved);
 end;
 
 destructor THost.Destroy;
 begin
   Shutdown;
+  FActive.Free;
   FFailed.Free;
   FPending.Free;
   FPendingLock.Free;
@@ -124,6 +129,7 @@ end;
 procedure THost.DoActivate(APlugin: IPlugin);
 begin
   FRoot.Plugin(APlugin);
+  FActive.Add(APlugin);
 end;
 
 procedure THost.RescanPending;
@@ -179,6 +185,49 @@ end;
 procedure THost.OnServiceAdded(const AGUID: TGUID);
 begin
   RescanPending;
+end;
+
+procedure THost.OnServiceRemoved(const AGUID: TGUID);
+var
+  LSnap: TList<IPlugin>;
+  I: Integer;
+  LPlugin: IPlugin;
+  LGUID: TGUID;
+begin
+  if not FStarted then
+    Exit;   { teardown in progress - do not cascade }
+  { Snapshot then act outside any list mutation: Unload disposes the dependent's
+    fiber, which unregisters ITS services, re-entering this handler (deeper
+    cascade levels). Single-threaded by contract. }
+  LSnap := TList<IPlugin>.Create;
+  try
+    for I := 0 to FActive.Count - 1 do
+      LSnap.Add(FActive[I]);
+    for I := 0 to LSnap.Count - 1 do
+    begin
+      LPlugin := LSnap[I];
+      for LGUID in LPlugin.Inject do
+        if IsEqualGUID(LGUID, AGUID) then
+        begin
+          { Provider vanished: deactivate the dependent (fiber unload -> its own
+            services unregister -> deeper cascade) and requeue it; it re-activates
+            when the dependency is registered again. }
+          if FRoot.Unload(LPlugin.PluginName) then
+          begin
+            FActive.Remove(LPlugin);
+            FPendingLock.Enter;
+            try
+              FPending.Add(LPlugin);
+            finally
+              FPendingLock.Leave;
+            end;
+          end;
+          Break;   { next dependent }
+        end;
+    end;
+  finally
+    LSnap.Free;
+  end;
 end;
 
 procedure THost.Mount(APlugin: IPlugin);

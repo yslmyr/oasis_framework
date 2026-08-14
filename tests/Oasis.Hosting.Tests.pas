@@ -43,6 +43,9 @@ type
 
     [Test]
     procedure Lifecycle_Events_Fire_In_Order;
+
+    [Test]
+    procedure Provider_Unload_Cascades_To_Consumer_And_Back;
   end;
 
 implementation
@@ -81,6 +84,7 @@ var
 begin
   G := Ctx.Services.Get(IGreeter) as IGreeter;
   FTrace.Add(G.Greet('Delphi'));
+  Ctx.Effects.AddCleanup(procedure begin FTrace.Add('consumer.unload'); end);
 end;
 
 { THostTests }
@@ -146,6 +150,40 @@ begin
     Assert.AreEqual('starting', Trace[0]);
     Assert.AreEqual('started',  Trace[1]);
     Assert.AreEqual('stopping', Trace[2]);
+  finally
+    Trace.Free;
+  end;
+end;
+
+procedure THostTests.Provider_Unload_Cascades_To_Consumer_And_Back;
+var
+  Host: THost;
+  Trace: TList<string>;
+begin
+  Trace := TList<string>.Create;
+  try
+    Host := THost.Create;
+    try
+      Host.Mount(TConsumerPlugin.Create(Trace));   { pending: no IGreeter yet }
+      Host.Mount(TGreeterPlugin.Create);            { provider -> consumer activates }
+      Host.Start;
+      Assert.AreEqual(1, Trace.Count);              { consumer ran }
+
+      { Unload the provider: its fiber-owned IGreeter unregisters, OnServiceRemoved
+        fires, the consumer is unloaded (cleanup trace) and requeued. }
+      Assert.IsTrue(Host.Root.Unload('greeter'));
+      Assert.AreEqual(1, Length(Host.PendingPlugins));
+      Assert.AreEqual('consumer.unload', Trace[1]);
+      Assert.IsFalse(Host.Root.Services.Has(IGreeter));
+
+      { Remount the provider: the pending consumer re-activates automatically. }
+      Host.Mount(TGreeterPlugin.Create);
+      Assert.AreEqual(0, Length(Host.PendingPlugins));
+      Assert.AreEqual(3, Trace.Count);              { greet, unload, greet again }
+      Assert.AreEqual('Hello, Delphi', Trace[2]);
+    finally
+      Host.Free;
+    end;
   finally
     Trace.Free;
   end;

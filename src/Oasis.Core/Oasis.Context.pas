@@ -65,6 +65,9 @@ type
     { Tear down ONE plugin's side-effects and re-run its Apply. Returns False if
       no mounted plugin has that name. }
     function  Reload(const AName: string): Boolean; overload;
+    { Unmount ONE plugin: dispose its fiber (effects + listeners + services) and
+      drop it. Returns False if no mounted plugin has that name. }
+    function  Unload(const AName: string): Boolean;
   end;
 
   TEventBusFactory = reference to function(AOwner: IEffectScope;
@@ -110,6 +113,7 @@ type
     procedure Dispose;
     procedure Reload; overload;
     function  Reload(const AName: string): Boolean; overload;
+    function  Unload(const AName: string): Boolean;
   end;
 
 implementation
@@ -221,6 +225,9 @@ begin
     registers are auto-unsubscribed when the fiber is disposed (per-plugin
     unload/reload) instead of waiting for context teardown. }
   FEvents.SetOwnerScope(LFiber);
+  { Services registered during Apply are fiber-owned too: they unregister when
+    the fiber disposes (provider unload/reload), firing OnServiceRemoved. }
+  FServices.SetOwnerScope(LFiber);
   try
     try
       if Assigned(AApply) then
@@ -243,6 +250,7 @@ begin
     end;
   finally
     FActiveFiber := LPrev;
+    FServices.SetOwnerScope(Effects); // ditto for service registrations
     FEvents.SetOwnerScope(Effects);  // back to the enclosing active scope
   end;
   LEntry.Name := AName;
@@ -424,6 +432,31 @@ begin
         on EOasisDisposeError do ;
       end;
       MountUnderFreshFiber(LEntry.Name, LEntry.Apply, LEntry.Returned);
+      Exit(True);
+    end;
+end;
+
+function TContext.Unload(const AName: string): Boolean;
+var
+  I: Integer;
+  LEntry: TPluginEntry;
+begin
+  Result := False;
+  if FDisposed then
+    Exit;
+  for I := 0 to FPlugins.Count - 1 do
+    if SameText(FPlugins[I].Name, AName) then
+    begin
+      LEntry := FPlugins[I];
+      FPlugins.Delete(I);
+      { Fiber disposal rolls back the plugin's effects + listeners and now also
+        unregisters its fiber-owned services (firing OnServiceRemoved, which the
+        Host uses to deactivate dependents). The entry is dropped, NOT remounted. }
+      try
+        LEntry.Fiber.Dispose;
+      except
+        on EOasisDisposeError do ;
+      end;
       Exit(True);
     end;
 end;
