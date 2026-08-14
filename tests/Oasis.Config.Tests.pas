@@ -24,6 +24,12 @@ type
 
     [Test]
     procedure Missing_File_Fails_The_Plugin;
+
+    [Test]
+    procedure Env_Layer_Overrides_Base_Without_Erasing_It;
+
+    [Test]
+    procedure Typed_Readers_Int_Bool_Float_With_Fallbacks;
   end;
 
 implementation
@@ -123,6 +129,75 @@ begin
     Assert.AreEqual('needs-config', Host.PendingPlugins[0]);
   finally
     Host.Free;
+  end;
+end;
+
+procedure TConfigTests.Env_Layer_Overrides_Base_Without_Erasing_It;
+var
+  Ctx: IContext;
+  LPath: string;
+  LCfg: IOasisConfig;
+begin
+  LPath := TPath.Combine(TPath.GetTempPath, 'oasis_cfg_layers.json');
+  TFile.WriteAllText(LPath,
+    '{"plugins":{' +
+    '"api":{"disabled":false,"config":{"port":"8080","prefix":"Hi"}}},' +
+    '"env":{' +
+    '"production":{"plugins":{' +
+    '"api":{"disabled":true,"config":{"port":"9090"}},' +
+    '"extra":{"config":{"only":"env"}}}}}}');
+  try
+    { with the env layer: overrides apply, unmentioned base keys survive }
+    Ctx := TContext.Create('root');
+    Ctx.Plugin(TJsonConfigPlugin.Create(LPath, 'production'));
+    LCfg := Ctx.Services.Get(IOasisConfig) as IOasisConfig;
+    Assert.IsTrue(LCfg.Disabled('api'));                 { env overrode false->true }
+    Assert.AreEqual('9090', LCfg.Value('api', 'port', ''));   { env value }
+    Assert.AreEqual('Hi', LCfg.Value('api', 'prefix', ''));   { base survives }
+    Assert.AreEqual('env', LCfg.Value('extra', 'only', ''));  { env-only plugin }
+    Ctx.Dispose;
+
+    { without the env layer: base values intact }
+    Ctx := TContext.Create('root2');
+    Ctx.Plugin(TJsonConfigPlugin.Create(LPath));
+    LCfg := Ctx.Services.Get(IOasisConfig) as IOasisConfig;
+    Assert.IsFalse(LCfg.Disabled('api'));
+    Assert.AreEqual('8080', LCfg.Value('api', 'port', ''));
+    Assert.IsFalse(LCfg.HasValue('extra', 'only'));
+    Ctx.Dispose;
+  finally
+    TFile.Delete(LPath);
+  end;
+end;
+
+procedure TConfigTests.Typed_Readers_Int_Bool_Float_With_Fallbacks;
+var
+  Ctx: IContext;
+  LPath: string;
+  LCfg: IOasisConfig;
+begin
+  LPath := TPath.Combine(TPath.GetTempPath, 'oasis_cfg_typed.json');
+  TFile.WriteAllText(LPath,
+    '{"plugins":{"app":{"config":{' +
+    '"port":"8080","verbose":"true","ratio":"1.5",' +
+    '"badint":"nope","badbool":"yes","badfloat":"x"}}}}');
+  try
+    Ctx := TContext.Create('root');
+    Ctx.Plugin(TJsonConfigPlugin.Create(LPath));
+    LCfg := Ctx.Services.Get(IOasisConfig) as IOasisConfig;
+    Assert.AreEqual(8080, LCfg.Int('app', 'port', 0));
+    Assert.IsTrue(LCfg.Bool('app', 'verbose', False));
+    Assert.AreEqual(Double(1.5), LCfg.Float('app', 'ratio', 0));
+    { missing keys -> defaults }
+    Assert.AreEqual(42, LCfg.Int('app', 'missing', 42));
+    Assert.IsTrue(LCfg.Bool('app', 'missing', True));
+    { unparseable -> defaults }
+    Assert.AreEqual(7, LCfg.Int('app', 'badint', 7));
+    Assert.IsTrue(LCfg.Bool('app', 'badbool', True));
+    Assert.AreEqual(Double(0.25), LCfg.Float('app', 'badfloat', 0.25));
+    Ctx.Dispose;
+  finally
+    TFile.Delete(LPath);
   end;
 end;
 

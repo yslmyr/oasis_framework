@@ -22,7 +22,9 @@ uses
   Oasis.Events.Tests in 'Oasis.Events.Tests.pas',
   Oasis.Context.Tests in 'Oasis.Context.Tests.pas',
   Oasis.Hosting.Tests in 'Oasis.Hosting.Tests.pas',
-  Oasis.Config.Tests in 'Oasis.Config.Tests.pas';
+  Oasis.Config.Tests in 'Oasis.Config.Tests.pas',
+  Oasis.UI in '..\src\Oasis.UI\Oasis.UI.pas',
+  Oasis.UI.Tests in 'Oasis.UI.Tests.pas';
 
 var
   LRunner: ITestRunner;

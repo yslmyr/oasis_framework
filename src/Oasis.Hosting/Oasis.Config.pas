@@ -8,15 +8,27 @@
       "plugins": {
         "greeter": {
           "disabled": true,          <- Host.TryMount skips disabled plugins
-          "config": { "prefix": "Hi" }  <- per-plugin string values
+          "config": { "prefix": "Hi", "retries": 3, "verbose": true }
+        }
+      },
+      "env": {                                   <- optional override layers
+        "production": {
+          "plugins": {
+            "greeter": { "config": { "retries": 5 } }
+          }
         }
       }
     }
 
-  Consumers inject IOasisConfig (GUID) like any service. Values are strings in
-  v1 (numbers/bools arrive as their JSON text); layers/overrides are a future
-  refinement. A missing file raises EOasisConfigError at Apply time (fail loud
-  - a plugin must not run on bad config). *)
+  Create(APath) loads the base layer only. Create(APath, 'production') merges
+  that env layer ON TOP: per plugin, "disabled" overrides when present (either
+  way), and "config" keys override individually - keys not mentioned survive
+  from the base layer (cordis.yml override semantics).
+
+  Values are stored as their JSON text and read typed: Value (string), Int,
+  Bool, Float - each falling back to its default when the key is missing or
+  not parseable. A missing file raises EOasisConfigError at Apply time (fail
+  loud - a plugin must not run on bad config). *)
 
 interface
 
@@ -27,11 +39,15 @@ uses
 type
   IOasisConfig = interface
     ['{88888888-0000-0000-0000-000000000008}']
-    { True when the plugin section exists and sets "disabled": true. }
+    { True when the (merged) plugin section sets "disabled": true. }
     function  Disabled(const APluginName: string): Boolean;
     { Per-plugin string value; ADefault when plugin/key is absent. }
     function  Value(const APluginName, AKey, ADefault: string): string;
     function  HasValue(const APluginName, AKey: string): Boolean;
+    { Typed readers: JSON text is parsed; ADefault when missing/unparseable. }
+    function  Int(const APluginName, AKey: string; ADefault: Integer): Integer;
+    function  Bool(const APluginName, AKey: string; ADefault: Boolean): Boolean;
+    function  Float(const APluginName, AKey: string; ADefault: Double): Double;
   end;
 
   EOasisConfigError = class(Exception);
@@ -41,8 +57,11 @@ type
   TJsonConfigPlugin = class(TOasisPlugin)
   strict private
     FPath: string;
+    FEnv: string;
+    procedure LoadSection(AImpl: TObject; ASection: TObject);
   public
-    constructor Create(const APath: string);
+    constructor Create(const APath: string); overload;
+    constructor Create(const APath, AEnv: string); overload;
     procedure Apply(const Ctx: IContext); override;
   end;
 
@@ -64,6 +83,9 @@ type
     function  Disabled(const APluginName: string): Boolean;
     function  Value(const APluginName, AKey, ADefault: string): string;
     function  HasValue(const APluginName, AKey: string): Boolean;
+    function  Int(const APluginName, AKey: string; ADefault: Integer): Integer;
+    function  Bool(const APluginName, AKey: string; ADefault: Boolean): Boolean;
+    function  Float(const APluginName, AKey: string; ADefault: Double): Double;
   end;
 
 { TConfigImpl }
@@ -121,20 +143,87 @@ begin
   Result := FValues.TryGetValue(APluginName, LSection) and LSection.ContainsKey(AKey);
 end;
 
+function TConfigImpl.Int(const APluginName, AKey: string; ADefault: Integer): Integer;
+var
+  LText: string;
+begin
+  LText := Value(APluginName, AKey, '');
+  if not TryStrToInt(LText, Result) then
+    Result := ADefault;
+end;
+
+function TConfigImpl.Bool(const APluginName, AKey: string; ADefault: Boolean): Boolean;
+var
+  LText: string;
+begin
+  LText := Value(APluginName, AKey, '');
+  if SameText(LText, 'true') then
+    Result := True
+  else if SameText(LText, 'false') then
+    Result := False
+  else
+    Result := ADefault;
+end;
+
+function TConfigImpl.Float(const APluginName, AKey: string; ADefault: Double): Double;
+var
+  LText: string;
+begin
+  LText := Value(APluginName, AKey, '');
+  if not TryStrToFloat(LText, Result) then
+    Result := ADefault;
+end;
+
 { TJsonConfigPlugin }
 
 constructor TJsonConfigPlugin.Create(const APath: string);
 begin
   inherited Create('json-config');
   FPath := APath;
+  FEnv := '';
+end;
+
+constructor TJsonConfigPlugin.Create(const APath, AEnv: string);
+begin
+  inherited Create('json-config');
+  FPath := APath;
+  FEnv := AEnv;
+end;
+
+procedure TJsonConfigPlugin.LoadSection(AImpl: TObject; ASection: TObject);
+var
+  LImpl: TConfigImpl;
+  LSection: TJSONObject;
+  LPlugins, LConfigObj: TJSONObject;
+  LPair, LCfgPair: TJSONPair;
+  I, J: Integer;
+begin
+  LImpl := TConfigImpl(AImpl);
+  LSection := TJSONObject(ASection);
+  LPlugins := LSection.GetValue('plugins') as TJSONObject;
+  for I := 0 to LPlugins.Count - 1 do
+  begin
+    LPair := LPlugins.Pairs[I];
+    if not (LPair.JsonValue is TJSONObject) then
+      Continue;
+    LConfigObj := LPair.JsonValue as TJSONObject;
+    if LConfigObj.FindValue('disabled') <> nil then
+      LImpl.SetDisabled(LPair.JsonString.Value, LConfigObj.GetValue<Boolean>('disabled'));
+    LConfigObj := LConfigObj.FindValue('config') as TJSONObject;
+    if LConfigObj <> nil then
+      for J := 0 to LConfigObj.Count - 1 do
+      begin
+        LCfgPair := LConfigObj.Pairs[J];
+        LImpl.SetValue(LPair.JsonString.Value, LCfgPair.JsonString.Value,
+          LCfgPair.JsonValue.Value);
+      end;
+  end;
 end;
 
 procedure TJsonConfigPlugin.Apply(const Ctx: IContext);
 var
-  LRoot, LPlugins, LSection, LConfigObj: TJSONObject;
-  LPair, LCfgPair: TJSONPair;
+  LRoot, LEnvSection: TJSONObject;
   LImpl: TConfigImpl;
-  I, J: Integer;
 begin
   if not TFile.Exists(FPath) then
     raise EOasisConfigError.CreateFmt('Config file not found: %s', [FPath]);
@@ -151,31 +240,30 @@ begin
 
     LImpl := TConfigImpl.Create;
     try
-      LPlugins := LRoot.GetValue('plugins') as TJSONObject;
-      for I := 0 to LPlugins.Count - 1 do
+      LoadSection(LImpl, LRoot);   { base layer }
+      if FEnv <> '' then
       begin
-        LPair := LPlugins.Pairs[I];
-        if not (LPair.JsonValue is TJSONObject) then
-          Continue;
-        LSection := LPair.JsonValue as TJSONObject;
-        if (LSection.FindValue('disabled') <> nil) and LSection.GetValue<Boolean>('disabled') then
-          LImpl.SetDisabled(LPair.JsonString.Value, True);
-        LConfigObj := LSection.FindValue('config') as TJSONObject;
-        if LConfigObj <> nil then
-          for J := 0 to LConfigObj.Count - 1 do
-          begin
-            LCfgPair := LConfigObj.Pairs[J];
-            LImpl.SetValue(LPair.JsonString.Value, LCfgPair.JsonString.Value,
-              LCfgPair.JsonValue.Value);
-          end;
+        LEnvSection := nil;
+        if LRoot.FindValue('env') is TJSONObject then
+          LEnvSection := (LRoot.FindValue('env') as TJSONObject).FindValue(FEnv) as TJSONObject;
+        if LEnvSection <> nil then
+          LoadSection(LImpl, LEnvSection)   { env layer ON TOP (overrides) }
+        else
+          raise EOasisConfigError.CreateFmt('Config env layer not found: %s (%s)', [FPath, FEnv]);
       end;
+      Ctx.Services.Register(IOasisConfig, LImpl);  { registry/fiber own it now }
     except
       on E: EOasisConfigError do
-        raise
+      begin
+        LImpl.Free;   { refcount 0 here - nothing has captured it yet }
+        raise;
+      end;
       else
+      begin
+        LImpl.Free;
         raise EOasisConfigError.CreateFmt('Config file structure invalid: %s', [FPath]);
+      end;
     end;
-    Ctx.Services.Register(IOasisConfig, LImpl);
   finally
     LRoot.Free;
   end;

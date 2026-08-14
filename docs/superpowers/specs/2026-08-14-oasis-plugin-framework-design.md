@@ -611,3 +611,26 @@ MVP **32/32**（新增：Reload_By_Name×2、级联、配置×3）、OTL 6/6，0
 
 - **#3 UI marshaling 桥**：暂缓。无 GUI 目标场景；实现成本低（本质 `TThread.Queue` 封装），需要时按 spec §6.2 线程边界一节建立 `Oasis.UI` 可选包即可。
 - 配置分层/覆盖（base + 环境特定）、非字符串值绑定。
+
+---
+
+## 17. 收尾特性实现笔记（UI marshaling 桥 + 配置分层/类型化，已实现）
+
+按用户指示把上节"剩余"两项落地（#3 不再暂缓）。
+
+### #3 UI marshaling 桥（`Oasis.UI`）
+
+- **`IUIInvoker`**（GUID `{9999...0009}`）：`Queue(TProc)`（异步，立即返回）/ `Sync(TProc)`（阻塞至完成）/ `MainThreadID`（创建时捕获的挂载线程 id）。
+- **实现纯 RTL**：`TThread.Queue(nil, ...)` / `TThread.Synchronize(nil, ...)`——不引用 Vcl.Forms/FMX.Types，**同一包同时服务 VCL 与 FMX** 宿主；运行期要求主线程泵 `CheckSynchronize`（VCL/FMX 的 `Application.Run` 自带；控制台宿主需自行周期调用）。
+- **`TUIInvokerPlugin`**：把 `IUIInvoker` 注册为服务，消费者照常 `Inject`。排队中的闭包由接口引用计数持有，teardown 时残留项内存安全。
+- **验证**：`Oasis.UI.Tests`（主套件，无 OTL 依赖）——工作线程发起 `Queue`/`Sync`，断言闭包在挂载线程执行且 `Sync` 阻塞语义成立（主线程泵等待循环）。36/36。
+
+### #4b 配置分层覆盖 + 类型化取值（`Oasis.Config` 扩展）
+
+- **env 分层**：schema 增加 `"env": { "<name>": { "plugins": {...} } } }`；`TJsonConfigPlugin.Create(path, env)` 把该层**叠在** base 之上：`disabled` 显式覆盖（双向），`config` 键逐个覆盖，未提及的 base 键保留（cordis.yml 覆盖语义）。env 名不存在则抛 `EOasisConfigError`（fail loud）。加载失败路径补了 `LImpl` 释放（防泄漏）。
+- **类型化读取**：`Int`/`Bool`/`Float`——存 JSON 文本、读时解析，缺失或不可解析回退默认值（`Bool` 对 `true/false` 大小写不敏感）。
+- **验证**：`Env_Layer_Overrides_Base_Without_Erasing_It`（覆盖/保留/env-only 插件/无 env 时 base 完整）、`Typed_Readers_Int_Bool_Float_With_Fallbacks`（命中/缺失/不可解析 × 三类型）。36/36。
+
+### 验证汇总
+
+主套件 **36/36**（新增 UI×2 + 配置×2），OTL 6/6，0 泄漏；`build.cmd` 纳入 `Oasis.UI.dpk` 一键构建 ALL GREEN。

@@ -1,0 +1,15 @@
+﻿package Oasis.UI;
+
+{ Oasis framework runtime package - UI thread marshaling bridge.
+  RTL-only (System.Classes), serves both VCL and FMX hosts. }
+
+{$ALIGN 8}
+
+requires
+  rtl,
+  Oasis.Core;
+
+contains
+  Oasis.UI;
+
+end.

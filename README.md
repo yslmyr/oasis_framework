@@ -33,7 +33,14 @@ Oasis brings Cordis's core design ideas to Delphi:
   returns.
 - **Config** — `TJsonConfigPlugin` registers an `IOasisConfig` service
   (`disabled` flag + per-plugin values); `Host.TryMount` skips disabled plugins
-  (cordis.yml semantics, JSON edition).
+  (cordis.yml semantics, JSON edition). Optional **env layers** merge overrides
+  on top of the base config (`Create(path, 'production')`); typed readers
+  `Int`/`Bool`/`Float` fall back to defaults on missing/unparseable values.
+- **UI marshaling** — `Oasis.UI` (optional package): `TUIInvokerPlugin`
+  registers an `IUIInvoker` service with `Queue`/`Sync` closures marshaled to
+  the mounting (main) thread. RTL-only implementation (`TThread.Queue/
+  Synchronize`), so the same package serves VCL and FMX hosts; console hosts
+  must pump `CheckSynchronize`.
 
 ## Status
 
@@ -46,8 +53,10 @@ Oasis brings Cordis's core design ideas to Delphi:
 | Roadmap 1 | per-plugin `Reload(name)` / `Unload(name)`, fiber-owned listeners | **Done** — tests |
 | Roadmap 2 | dependency deactivation cascade (`Unregister`/`OnServiceRemoved`) | **Done** — tests |
 | Roadmap 4 | JSON config plugin + `Host.TryMount` (`disabled` support) | **Done** — tests |
-| Hardening | Apply-failure visibility (`FailedPlugins` + `EV_HOST_PLUGIN_FAILED`); runtime packages (`Oasis.Core/.Hosting/.Otl/.Bpl.dpk`) + one-click `build.cmd` | **Done** — 32/32 + 6/6 |
-| Future | UI thread marshaling bridge (deferred — no GUI target yet); config layers/overrides | Evaluated |
+| Hardening | Apply-failure visibility (`FailedPlugins` + `EV_HOST_PLUGIN_FAILED`); runtime packages (`Oasis.Core/.Hosting/.Otl/.Bpl/.UI.dpk`) + one-click `build.cmd` | **Done** |
+| Roadmap 3 | `Oasis.UI` — `IUIInvoker` (`Queue`/`Sync`) main-thread marshaling bridge (RTL-only, VCL/FMX-agnostic) | **Done** — tests |
+| Roadmap 4b | Config env layers (base + override) + typed readers (`Int`/`Bool`/`Float`) | **Done** — tests |
+| Future | — | — |
 
 ## Requirements
 
@@ -67,6 +76,8 @@ src/
                    via OmniThreadLibrary; inherits TEventBus + Oasis.Otl.dpk
   Oasis.Bpl/       (phase 3) TBplPluginLoader + IOasisPluginFactory contract
                    + Oasis.Bpl.dpk
+  Oasis.UI/        (roadmap 3) IUIInvoker + TUIInvokerPlugin — main-thread
+                   marshaling (Queue/Sync), RTL-only + Oasis.UI.dpk
 build.cmd          one-click build & test script (packages -> bin\)
 samples/BplPlugin/ (phase 3) a sample BPL plugin (.dpk/.pas) + shared contract
 tests/             DUnitX unit tests (Oasis.Tests.dpr — Core/Hosting, OTL-free)

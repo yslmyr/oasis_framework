@@ -17,6 +17,7 @@ set "CORE=%ROOT%src\Oasis.Core"
 set "HOSTING=%ROOT%src\Oasis.Hosting"
 set "OTLP=%ROOT%src\Oasis.Otl"
 set "BPLP=%ROOT%src\Oasis.Bpl"
+set "UIP=%ROOT%src\Oasis.UI"
 set "BIN=%ROOT%bin"
 
 if exist "%BIN%" rmdir /s /q "%BIN%"
@@ -31,6 +32,8 @@ popd
 pushd "%OTLP%" && "%DCC%" -B %NS% -U"%CORE%" -U"%OTLP%" -U"%OTL%" -U"%OTL%\src" -U"%BIN%" -E"%BIN%" Oasis.Otl.dpk || goto :fail
 popd
 pushd "%BPLP%" && "%DCC%" -B %NS% -U"%CORE%" -U"%HOSTING%" -U"%BPLP%" -U"%BIN%" -E"%BIN%" Oasis.Bpl.dpk || goto :fail
+popd
+pushd "%UIP%" && "%DCC%" -B %NS% -U"%CORE%" -U"%UIP%" -U"%BIN%" -E"%BIN%" Oasis.UI.dpk || goto :fail
 popd
 
 echo [2/6] Building + running MVP test suite (Core + Hosting)...
