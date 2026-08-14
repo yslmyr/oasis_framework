@@ -1,0 +1,16 @@
+﻿package Oasis.Hosting;
+
+{ Oasis framework runtime package - host/loader/config layer. }
+
+{$ALIGN 8}
+
+requires
+  rtl,
+  Oasis.Core;
+
+contains
+  Oasis.Loader,
+  Oasis.Host,
+  Oasis.Config;
+
+end.

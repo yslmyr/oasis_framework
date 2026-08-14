@@ -25,6 +25,7 @@ uses
   Oasis.Plugin in '..\..\src\Oasis.Core\Oasis.Plugin.pas',
   Oasis.Loader in '..\..\src\Oasis.Hosting\Oasis.Loader.pas',
   Oasis.Host in '..\..\src\Oasis.Hosting\Oasis.Host.pas',
+  Oasis.Config in '..\..\src\Oasis.Hosting\Oasis.Config.pas',
   Oasis.BplContract in '..\..\src\Oasis.Bpl\Oasis.BplContract.pas',
   Oasis.BplLoader in '..\..\src\Oasis.Bpl\Oasis.BplLoader.pas',
   SampleContract in '..\..\samples\BplPlugin\SampleContract.pas';

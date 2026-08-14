@@ -46,6 +46,7 @@ Oasis brings Cordis's core design ideas to Delphi:
 | Roadmap 1 | per-plugin `Reload(name)` / `Unload(name)`, fiber-owned listeners | **Done** — tests |
 | Roadmap 2 | dependency deactivation cascade (`Unregister`/`OnServiceRemoved`) | **Done** — tests |
 | Roadmap 4 | JSON config plugin + `Host.TryMount` (`disabled` support) | **Done** — tests |
+| Hardening | Apply-failure visibility (`FailedPlugins` + `EV_HOST_PLUGIN_FAILED`); runtime packages (`Oasis.Core/.Hosting/.Otl/.Bpl.dpk`) + one-click `build.cmd` | **Done** — 32/32 + 6/6 |
 | Future | UI thread marshaling bridge (deferred — no GUI target yet); config layers/overrides | Evaluated |
 
 ## Requirements
@@ -59,11 +60,14 @@ Oasis brings Cordis's core design ideas to Delphi:
 src/
   Oasis.Core/      zero-dependency core: Types, Errors, Effects, Services,
                    Events, Context (IContext+IPlugin+TContext), Plugin base
+                   + Oasis.Core.dpk (runtime package)
   Oasis.Hosting/   IPluginLoader + TInProcPluginLoader, THost, Oasis.Config
-                   (JSON config plugin + TryMount)
+                   (JSON config plugin + TryMount) + Oasis.Hosting.dpk
   Oasis.Otl/       (phase 2) IAsyncEventBus + TAsyncEventBus — Parallel/SerialAsync
-                   via OmniThreadLibrary; inherits TEventBus
+                   via OmniThreadLibrary; inherits TEventBus + Oasis.Otl.dpk
   Oasis.Bpl/       (phase 3) TBplPluginLoader + IOasisPluginFactory contract
+                   + Oasis.Bpl.dpk
+build.cmd          one-click build & test script (packages -> bin\)
 samples/BplPlugin/ (phase 3) a sample BPL plugin (.dpk/.pas) + shared contract
 tests/             DUnitX unit tests (Oasis.Tests.dpr — Core/Hosting, OTL-free)
 tests/otl/         OTL test runner (Oasis.Otl.Tests.dpr — needs OmniThreadLibrary)
@@ -74,6 +78,12 @@ docs/superpowers/  design spec + implementation plan
 ```
 
 ## Build & run
+
+**One click** (builds runtime packages + runs both test suites + builds all demos):
+
+```bash
+build.cmd        # expect: ALL GREEN (32/32 + 6/6 tests, packages in bin\)
+```
 
 The Delphi 13 toolchain is used directly (`dcc32`). From the respective folder:
 
@@ -103,12 +113,18 @@ OasisOtlDemo.exe           # expect: 5 listeners across 5 distinct worker thread
 
 **Phase 3 (BPL plugin, dynamic loading)** — build the sample BPL, then the host
 (the host must use the RTL runtime package so it shares `rtl.bpl`'s class list
-with the BPL; `rtl.bpl` must be on PATH at run time):
+with the BPL; `rtl.bpl` and the Oasis `.bpl`s must be on PATH at run time):
 
 ```bash
-# sample BPL — from samples/BplPlugin/
+# runtime packages first (produces .bpl/.dcp next to each .dpk or in bin/)
 dcc32 -B -NSWinapi;System;System.Win;Vcl;System.Classes \
-  -U"<repo>/src/Oasis.Core" -U"<repo>/src/Oasis.Bpl" -U. SamplePlugin.dpk
+  -U"<repo>/src/Oasis.Core" -E"<repo>/bin" src/Oasis.Core/Oasis.Core.dpk
+# ... likewise Oasis.Hosting.dpk and Oasis.Bpl.dpk (or just run build.cmd)
+
+# sample BPL — from samples/BplPlugin/ (requires Oasis.Core + Oasis.Bpl)
+dcc32 -B -NSWinapi;System;System.Win;Vcl;System.Classes \
+  -U"<repo>/src/Oasis.Core" -U"<repo>/src/Oasis.Bpl" \
+  -U"<repo>/src/Oasis.Hosting" -U. SamplePlugin.dpk
 # -> SamplePlugin.bpl
 
 # host — from demos/BplDemo/  (note -LUrtl)

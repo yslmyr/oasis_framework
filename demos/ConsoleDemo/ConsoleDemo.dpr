@@ -18,7 +18,8 @@ uses
   Oasis.Context in '..\..\src\Oasis.Core\Oasis.Context.pas',
   Oasis.Plugin in '..\..\src\Oasis.Core\Oasis.Plugin.pas',
   Oasis.Loader in '..\..\src\Oasis.Hosting\Oasis.Loader.pas',
-  Oasis.Host in '..\..\src\Oasis.Hosting\Oasis.Host.pas';
+  Oasis.Host in '..\..\src\Oasis.Hosting\Oasis.Host.pas',
+  Oasis.Config in '..\..\src\Oasis.Hosting\Oasis.Config.pas';
 
 type
   IConfig = interface

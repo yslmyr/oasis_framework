@@ -3,24 +3,22 @@
 {$ALIGN 8}
 {$RUNONLY}
 
-{ Runtime package plugin. Exports OasisCreatePlugin (defined in SamplePlugin)
-  for the host's TBplPluginLoader to resolve via GetProcAddress. Statically
-  contains its own copy of Oasis.Core (interface dispatch by GUID + vtable keeps
-  the host/BPL boundary safe) and requires the Delphi RTL runtime package. }
+(* Runtime package plugin. Consumes the Oasis runtime packages the way a real
+  BPL plugin would: requires Oasis.Core (plugin contract + context) and
+  Oasis.Bpl (the IOasisPluginFactory contract it registers). The host finds the
+  factory via the shared rtl.bpl class list (RegisterClassAlias/FindClass).
+
+  Build with: dcc32 -B -N... -U<Oasis.Core dir> -U<Oasis.Bpl dir> -U<Oasis.Hosting dir> SamplePlugin.dpk
+  The .dcp files of Oasis.Core/.Hosting/.Bpl must be on the search path; at run
+  time those .bpl files must be on PATH (or next to the host EXE). *)
 
 requires
-  rtl;
+  rtl,
+  Oasis.Core,
+  Oasis.Bpl;
 
 contains
   SampleContract,
-  SamplePlugin,
-  Oasis.BplContract,
-  Oasis.Plugin,
-  Oasis.Context,
-  Oasis.Events,
-  Oasis.Services,
-  Oasis.Effects,
-  Oasis.Errors,
-  Oasis.Types;
+  SamplePlugin;
 
 end.

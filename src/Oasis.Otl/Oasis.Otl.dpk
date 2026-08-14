@@ -1,0 +1,24 @@
+﻿package Oasis.Otl;
+
+{ Oasis framework runtime package - async event bus over OmniThreadLibrary
+  (phase 2). Bundles the OTL units Oasis.OtlEvents needs. }
+
+{$ALIGN 8}
+
+requires
+  rtl,
+  Oasis.Core;
+
+contains
+  Oasis.OtlEvents,
+  OtlParallel,
+  OtlCommon,
+  OtlSync,
+  OtlCollections,
+  OtlTask,
+  OtlTaskControl,
+  OtlDataManager,
+  OtlEventMonitor,
+  GpLists;
+
+end.

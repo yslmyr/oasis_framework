@@ -1,0 +1,16 @@
+﻿package Oasis.Bpl;
+
+{ Oasis framework runtime package - BPL plugin loader (phase 3). }
+
+{$ALIGN 8}
+
+requires
+  rtl,
+  Oasis.Core,
+  Oasis.Hosting;
+
+contains
+  Oasis.BplContract,
+  Oasis.BplLoader;
+
+end.

@@ -1,0 +1,19 @@
+﻿package Oasis.Core;
+
+{ Oasis framework runtime package - core (zero third-party dependencies). }
+
+{$ALIGN 8}
+
+requires
+  rtl;
+
+contains
+  Oasis.Types,
+  Oasis.Errors,
+  Oasis.Effects,
+  Oasis.Services,
+  Oasis.Events,
+  Oasis.Context,
+  Oasis.Plugin;
+
+end.
