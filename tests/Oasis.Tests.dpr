@@ -12,9 +12,12 @@ uses
   Oasis.Effects in '..\src\Oasis.Core\Oasis.Effects.pas',
   Oasis.Services in '..\src\Oasis.Core\Oasis.Services.pas',
   Oasis.Events in '..\src\Oasis.Core\Oasis.Events.pas',
+  Oasis.Context in '..\src\Oasis.Core\Oasis.Context.pas',
+  Oasis.Plugin in '..\src\Oasis.Core\Oasis.Plugin.pas',
   Oasis.Effects.Tests in 'Oasis.Effects.Tests.pas',
   Oasis.Services.Tests in 'Oasis.Services.Tests.pas',
-  Oasis.Events.Tests in 'Oasis.Events.Tests.pas';
+  Oasis.Events.Tests in 'Oasis.Events.Tests.pas',
+  Oasis.Context.Tests in 'Oasis.Context.Tests.pas';
 
 var
   LRunner: ITestRunner;
