@@ -1,0 +1,70 @@
+# --- Delphi / RAD Studio build artifacts ---
+*.dcu
+*.dcuil
+*.dpu
+*.bpl
+*.dcp
+*.dll
+*.exe
+*.so
+*.apk
+*.drc
+*.map
+*.tds
+*.rsm
+*.lib
+*.a
+*.o
+
+# --- RAD Studio intermediate / backup files ---
+*.~
+*.bak
+*.cbk
+*.tmp
+*.local
+*.identcache
+*.projdata
+*.tvsconfig
+*.dsk
+*.bdsproj.local
+*.bpg.local
+*.dproj.user
+*.dproj.local
+*.deployproj
+*.groupproj.user
+*.groupproj.local
+*.otares
+
+# --- RAD Studio history / recovery dirs ---
+__history/
+__recovery/
+__astudio/
+*.deployproj
+
+# --- Common build output dirs ---
+bin/
+lib/
+Win32/
+Win64/
+Android/
+iOSDevice64/
+Linux64/
+OSX64/
+OSXARM64/
+
+# --- IDE / editor ---
+.vs/
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# --- Local tooling indexes (daofy Delphi knowledge base, etc.) ---
+.delphi-kb/
+.codegraph/
+
+# --- OmniThreadLibrary / third-party pulled libs (uncomment if vendored build output) ---
+# thirdparty/**/bin/
+# thirdparty/**/lib/
