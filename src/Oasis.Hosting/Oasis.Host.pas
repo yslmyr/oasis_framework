@@ -11,7 +11,8 @@ interface
 
 uses
   System.SysUtils, System.SyncObjs, System.Generics.Collections,
-  Oasis.Types, Oasis.Errors, Oasis.Context, Oasis.Plugin, Oasis.Loader;
+  Oasis.Types, Oasis.Errors, Oasis.Context, Oasis.Plugin, Oasis.Loader,
+  Oasis.Config;
 
 const
   EV_HOST_STARTING      : TEventKey = 'host/starting';
@@ -41,6 +42,9 @@ type
     function  Root: IContext;
     procedure Use(ALoader: IPluginLoader);
     procedure Mount(APlugin: IPlugin); overload;
+    { Config-aware mount: returns False (and skips mounting) when an IOasisConfig
+      service is registered and marks this plugin "disabled". }
+    function  TryMount(APlugin: IPlugin): Boolean; overload;
     procedure Mount(const ASource: string); overload;
     procedure Start;
     procedure Shutdown;
@@ -228,6 +232,20 @@ begin
   finally
     LSnap.Free;
   end;
+end;
+
+function THost.TryMount(APlugin: IPlugin): Boolean;
+var
+  LUnk: IInterface;
+  LConfig: IOasisConfig;
+begin
+  Result := False;
+  if FRoot.Services.Resolve(IOasisConfig, LUnk) and
+     Supports(LUnk, IOasisConfig, LConfig) and
+     LConfig.Disabled(APlugin.PluginName) then
+    Exit;   { configured off }
+  Mount(APlugin);
+  Result := True;
 end;
 
 procedure THost.Mount(APlugin: IPlugin);

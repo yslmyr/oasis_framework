@@ -16,11 +16,13 @@ uses
   Oasis.Plugin in '..\src\Oasis.Core\Oasis.Plugin.pas',
   Oasis.Loader in '..\src\Oasis.Hosting\Oasis.Loader.pas',
   Oasis.Host in '..\src\Oasis.Hosting\Oasis.Host.pas',
+  Oasis.Config in '..\src\Oasis.Hosting\Oasis.Config.pas',
   Oasis.Effects.Tests in 'Oasis.Effects.Tests.pas',
   Oasis.Services.Tests in 'Oasis.Services.Tests.pas',
   Oasis.Events.Tests in 'Oasis.Events.Tests.pas',
   Oasis.Context.Tests in 'Oasis.Context.Tests.pas',
-  Oasis.Hosting.Tests in 'Oasis.Hosting.Tests.pas';
+  Oasis.Hosting.Tests in 'Oasis.Hosting.Tests.pas',
+  Oasis.Config.Tests in 'Oasis.Config.Tests.pas';
 
 var
   LRunner: ITestRunner;
