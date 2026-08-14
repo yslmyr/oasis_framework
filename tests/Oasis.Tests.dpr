@@ -10,7 +10,9 @@ uses
   Oasis.Types in '..\src\Oasis.Core\Oasis.Types.pas',
   Oasis.Errors in '..\src\Oasis.Core\Oasis.Errors.pas',
   Oasis.Effects in '..\src\Oasis.Core\Oasis.Effects.pas',
-  Oasis.Effects.Tests in 'Oasis.Effects.Tests.pas';
+  Oasis.Services in '..\src\Oasis.Core\Oasis.Services.pas',
+  Oasis.Effects.Tests in 'Oasis.Effects.Tests.pas',
+  Oasis.Services.Tests in 'Oasis.Services.Tests.pas';
 
 var
   LRunner: ITestRunner;
