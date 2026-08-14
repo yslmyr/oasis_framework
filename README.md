@@ -17,7 +17,8 @@ Oasis brings Cordis's core design ideas to Delphi:
   `Ctx.Services.Get(IConfig) as IConfig`).
 - **Events** — `Emit` / `Serial` / `Waterfall` (sync) with per-listener fault
   isolation and bubbling; `Waterfall` short-circuits when a listener skips
-  `Next`. (Async `Parallel` via OmniThreadLibrary is phase 2.)
+  `Next`. **Async** `Parallel` / `SerialAsync` (concurrent / sequential on the
+  OmniThreadLibrary pool) via the optional `Oasis.Otl` package.
 - **Dependency activation** — a plugin declares the service GUIDs it needs
   (`Inject`); it activates as soon as they are resolvable. Mount order does not
   matter — the host rescans the pending queue on every service registration.
@@ -29,7 +30,7 @@ Oasis brings Cordis's core design ideas to Delphi:
 | Phase | Scope | Status |
 |---|---|---|
 | MVP | `Oasis.Core` + `Oasis.Hosting` (in-process loader + `THost`) | **Done** — 25/25 tests, demo runs |
-| Phase 2 | `Oasis.Otl` — async `Parallel`/`Serial` via OTL | Planned |
+| Phase 2 | `Oasis.Otl` — async `Parallel`/`SerialAsync` via OTL | **Done** — 6/6 tests, async demo runs |
 | Phase 3 | `Oasis.Bpl` — dynamic BPL loading | Planned |
 | Future | `Context.Reload` hot-reload | Evaluated |
 
@@ -45,8 +46,12 @@ src/
   Oasis.Core/      zero-dependency core: Types, Errors, Effects, Services,
                    Events, Context (IContext+IPlugin+TContext), Plugin base
   Oasis.Hosting/   IPluginLoader + TInProcPluginLoader, THost
-tests/             DUnitX unit tests (Oasis.Tests.dpr)
-demos/ConsoleDemo/ 3-plugin dependency chain + lifecycle event
+  Oasis.Otl/       (phase 2) IAsyncEventBus + TAsyncEventBus — Parallel/SerialAsync
+                   via OmniThreadLibrary; inherits TEventBus
+tests/             DUnitX unit tests (Oasis.Tests.dpr — Core/Hosting, OTL-free)
+tests/otl/         OTL test runner (Oasis.Otl.Tests.dpr — needs OmniThreadLibrary)
+demos/ConsoleDemo/ 3-plugin dependency chain + lifecycle event (OTL-free)
+demos/OtlDemo/     async Parallel demo (needs OmniThreadLibrary)
 docs/superpowers/  design spec + implementation plan
 ```
 
@@ -62,6 +67,20 @@ Oasis.Tests.exe            # expect: Tests Passed: 25, Failed: 0, Errored: 0
 # demo — from demos/ConsoleDemo/
 dcc32 -B ConsoleDemo.dpr
 ConsoleDemo.exe            # expect: "OasisDemo is running." / Pending: 0 / Failed: 0
+```
+
+**Phase 2 (async, needs OmniThreadLibrary)** — add OTL to the search path and the
+`Winapi` namespace:
+
+```bash
+# OTL tests — from tests/otl/  (OTL at D:\code\awesome-pascal\OmniThreadLibrary)
+dcc32 -B -NSWinapi;System;System.Win;Vcl \
+  -U"<DUnitX>" -U"<OTL>" -U"<OTL>\src" Oasis.Otl.Tests.dpr
+Oasis.Otl.Tests.exe        # expect: Tests Passed: 6
+
+# async demo — from demos/OtlDemo/
+dcc32 -B -NSWinapi;System;System.Win;Vcl -U"<OTL>" -U"<OTL>\src" OasisOtlDemo.dpr
+OasisOtlDemo.exe           # expect: 5 listeners across 5 distinct worker threads
 ```
 
 ## A plugin in 30 seconds

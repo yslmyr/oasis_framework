@@ -522,3 +522,18 @@ MVP = `Oasis.Core` + `Oasis.Hosting`（`TInProcPluginLoader` + `THost`）。全�
 - `Context.Reload` 热重载（远期）
 - UI 线程 marshaling 桥（远期 `Oasis.UI`）
 - 强类型 `On<TPayload>` 事件泛型变体（二期增强）
+
+---
+
+## 13. 二期实现笔记（Phase 2 — `Oasis.Otl`，已实现）
+
+二期按 §6.2 契约落地，遇到 OTL/Delphi 现实时做了如下细化（与 MVP 同样的"spec 遇现实"模式）：
+
+| §6.2 契约 | 实际实现 | 原因 |
+|---|---|---|
+| `TAsyncEventHandler = reference to function(args): IOmniFuture` | `reference to procedure(args)` | OTL 的 `IOmniFuture<T>` 是**泛型**的；强制监听器返回 future 既难用又难组合。框架自己在 `MakeFuture` 里把每个监听器包进 `Parallel.Future<string>`，监听器只须是个普通过程。 |
+| `Parallel / SerialAsync: IOmniFuture` | 返回 `Integer`（运行数），阻塞至全部完成 | OTL 无非泛型 `IOmniFuture`，且对 N 个 future 做 "join" 组合子不便。Parallel 用 fork-join（先并发 `Parallel.Future<string>` 全部启动，再逐个 `.Value` 等待）；并发性体现在**监听器并发执行**（这正是 Cordis parallel 的价值）。非阻塞 `IOmniFuture<Integer>` 变体留作后续。 |
+| "订阅表共享" | `TAsyncEventBus` **继承** `TEventBus`（复用同步 On/Emit/Serial/Waterfall + token 自动退订），另加独立的异步监听器表 | 同步与异步监听器分属不同分发（Emit 只跑同步、Parallel 只跑异步），分表即可；继承避免重写同步逻辑（DRY）。 |
+| `Supports(Ctx.Events, IAsyncEventBus)` | `TContext` 增加类级可插拔 `TEventBusFactory`（默认 nil → `TEventBus`，Core 零依赖不变）；`OasisRegisterAsyncEventBus` 安装 `TAsyncEventBus` 为默认 | Core 不能引用 OTL；用工厂钩子让上层（应用）在启动期一次性安装。安装后新建的 `TContext`（含 `Fork`）的事件总线即 `IAsyncEventBus`。 |
+
+故障隔离与生命周期沿用同步总线：每个监听器在 future 内 try/except，异常以错误消息返回，Parallel 汇总后抛 `EOasisEventError`；`OnAsync` 用 token 自动退订，注册产生 bus↔owner-scope 引用环，由 `Dispose` 断开。验证：`tests/otl/Oasis.Otl.Tests.dpr` 6/6（含上下文集成）；`demos/OtlDemo` 5 监听器跑在 5 个不同工作线程，证明真实并发。
