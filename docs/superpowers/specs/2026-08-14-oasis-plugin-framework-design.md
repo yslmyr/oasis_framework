@@ -1,8 +1,8 @@
 # Oasis 插件框架设计（Cordis 理念的 Delphi 实现）
 
-- **状态**：草案待评审
-- **日期**：2026-08-14
-- **目标 Delphi 版本**：10.4 Sydney 及以上
+- **状态**：✅ **已全部实现并发布**（v0.2.0）——MVP、二期（Otl）、三期（Bpl）、四期（Reload）及评估路线图全部特性均已交付；各阶段实现细化见 §13–§17。测试 42 项全绿，仓库 https://github.com/yslmyr/oasis_framework
+- **日期**：2026-08-14（设计定稿与实现同日完成）
+- **目标 Delphi 版本**：10.4 Sydney 及以上（实际以 Delphi 13 Florence 编译验证）
 - **参考**：[Cordis](https://github.com/cordiverse/cordis)、[Cordis Primer](https://deepseek-harness.github.io/deepseek-harness/reference/cordis-primer)
 
 ---
@@ -505,23 +505,24 @@ MVP = `Oasis.Core` + `Oasis.Hosting`（`TInProcPluginLoader` + `THost`）。全�
 
 ---
 
-## 11. 分阶段路线图
+## 11. 分阶段路线图（全部已完成）
 
-- **MVP（本期 + 首个实现计划）**：`Oasis.Core` 全部 + `Oasis.Hosting`（`TInProcPluginLoader` + `THost`）。同步事件、上下文树、可逆副作用、GUID 服务注册表、进程内插件。**交付即可跑的 demo。**
-- **二期**：`Oasis.Otl`——把 `parallel`/异步 `serial` 接到 OTL，`IEventBus` 升级为异步可 await。
-- **三期**：`Oasis.Bpl`——`IPluginLoader` 的 BPL 实现 + 导出函数 ABI 契约。
-- **远期（reload）**：`Context.Reload`——销毁全部副作用 + 重新挂载。
+- **MVP** ✅：`Oasis.Core` 全部 + `Oasis.Hosting`（`TInProcPluginLoader` + `THost`）。同步事件、上下文树、可逆副作用、GUID 服务注册表、进程内插件。交付即可跑的 demo。——已实现（§9 验收标准全部满足）
+- **二期** ✅：`Oasis.Otl`——`Parallel`/`SerialAsync` 接入 OTL。——已实现，细化见 §13
+- **三期** ✅：`Oasis.Bpl`——`IPluginLoader` 的 BPL 实现（工厂契约）。——已实现，细化见 §14
+- **四期（原"远期 reload"）** ✅：`Context.Reload` + 单插件 `Reload(name)`/`Unload(name)`。——已实现，细化见 §15、§16
+- **评估路线图** ✅：依赖失效级联、JSON 配置（含 env 分层/类型化）、UI marshaling 桥。——已实现，细化见 §16、§17
 
 ---
 
-## 12. 明确排除（YAGNI 留作后续评估）
+## 12. 明确排除（YAGNI）——截至 v0.2.0 的状态
 
-- 跨语言插件（DLL + C ABI 导出）
-- Spring4D 硬依赖（可选后续集成，不进 MVP）
-- 字段级 `[Inject(GUID)]` 特性注入（二期增强）
-- `Context.Reload` 热重载（远期）
-- UI 线程 marshaling 桥（远期 `Oasis.UI`）
-- 强类型 `On<TPayload>` 事件泛型变体（二期增强）
+- 跨语言插件（DLL + C ABI 导出）——**仍未做**（保留排除）
+- Spring4D 硬依赖——**仍未做**（保留排除；框架保持零三方依赖）
+- 字段级 `[Inject(GUID)]` 特性注入——**仍未做**（保留排除）
+- ~~`Context.Reload` 热重载（远期）~~——**已实现**（§15/§16）
+- ~~UI 线程 marshaling 桥（远期 `Oasis.UI`）~~——**已实现**（§17）
+- 强类型 `On<TPayload>` 事件泛型变体——**仍未做**（保留排除）
 
 ---
 
