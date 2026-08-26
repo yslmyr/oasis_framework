@@ -440,8 +440,11 @@ begin
                  WaterfallRun(AArr, AArgs, I + 1, AState);
                end;
       LListener.Waterfall(AArgs, LNext);
-      if not LCalledNext then
-        Exit;   { short-circuit: handler vetoed }
+      { Whether the handler delegated (Next recursed into the rest of the
+        chain in a nested frame) or vetoed, THIS frame must not resume its
+        loop - resuming would re-run every remaining listener once per
+        ancestor frame. Discovered by the VclShowroom selftest counters. }
+      Exit;
     end;
     Inc(I);
   end;
