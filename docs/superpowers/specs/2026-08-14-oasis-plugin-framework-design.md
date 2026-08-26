@@ -716,3 +716,16 @@ MVP **32/32**（新增：Reload_By_Name×2、级联、配置×3）、OTL 6/6，0
 ### 验证
 
 主套件 **44/44**（新增 8 项：bail×3 —— 真值胜出停止链 / 全假返回 Empty / 冒泡；typed×2 —— record 载荷往返 / 作用域销毁自动退订；states×3 —— active→failed→disposed 全程 / Host pending / reload 回 active），OTL 6/6，`build.cmd` ALL GREEN。
+
+---
+
+## 21. Waterfall 委托返回后祖先帧复跑（真 Bug，已修复）
+
+`demos/VclShowroom`（Cordis 架构优势展示间）的无头自检用调用计数器量化各派发模式语义，捕获到一个测试套件此前未曾覆盖的真实缺陷：
+
+**现象**：三段中间件 `m1→Next→m2(否决)` 时，监听器执行次数为 `[1,2,0]` —— m2 被跑了两次。
+
+**根因**（`Oasis.Events.TEventBus.WaterfallRun`）：短路保护 `if not LCalledNext then Exit` 只覆盖"本帧的监听器没有调用 Next"。当本帧监听器**委托**了 Next（递归进子帧处理后续链路）后正常返回，父帧会继续推进自己的 while 循环，把自己之后的所有中间件再从头跑一遍——每层祖先帧重复一次。
+
+**修复**：`TEventBus.WaterfallRun` 中，凡 waterfall 监听器执行完毕一律 `Exit`：要么它调用了 Next（剩余链路已在子帧递归完毕），要么它否决（链就此截止）。两种合法语义下的结果不变；仅消除病态复跑。验证：主套件 44/44、OTL 6/6 不回归；Showroom 自检计数断言 `[1,1,0]`。
+

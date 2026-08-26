@@ -101,6 +101,14 @@ demos/VclHostDemo/  **VCL plugin-manager GUI** - the Windows-app showcase:
                    plugin list w/ status, plugin-contributed tabs, mount /
                    unload / reload buttons, Load-BPL-from-disk, event log.
                    `HostApp.exe /selftest` = headless end-to-end verification
+demos/VclShowroom/  **Cordis 架构优势展示间** - six clickable scenario cards,
+                   one per advantage: mount-order independence (live
+                   PENDING→ACTIVE), failure isolation + Reload heal, two-hop
+                   dependency cascade, config gating via TryMount, Fork scope
+                   tree with service shadowing + event bubbling, worker-thread
+                   →IUIInvoker marshaling; dispatch playground with call
+                   counters for emit/bail/waterfall. Statically linked (no BPLs).
+                   `Showroom.exe /selftest` = 32-check headless report
 samples/VclBplPlugin/ VCL BPL plugin adding a tab to the running host app
 docs/superpowers/  design spec + implementation plan
 ```
@@ -110,7 +118,7 @@ docs/superpowers/  design spec + implementation plan
 **One click** (builds runtime packages + runs both test suites + builds all demos):
 
 ```bash
-build.cmd        # expect: ALL GREEN (32/32 + 6/6 tests, packages in bin\)
+build.cmd        # expect: ALL GREEN (44/44 + 6/6 tests, 32/32 Showroom selftest)
 ```
 
 The Delphi 13 toolchain is used directly (`dcc32`). From the respective folder:
