@@ -72,6 +72,7 @@ bpldemo_out.txt
 *_out.txt
 vclhost_selftest.txt
 vclhost_probe.txt
+vclshowroom_selftest.txt
 
 # --- OmniThreadLibrary / third-party pulled libs (uncomment if vendored build output) ---
 # thirdparty/**/bin/

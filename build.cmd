@@ -73,7 +73,14 @@ popd
 echo [+] Building VCL host demo (plugin-manager GUI, -LUrtl -LUvcl)...
 pushd "%ROOT%demos\VclHostDemo" && "%DCC%" -B %NS% -LUrtl -LUvcl HostApp.dpr || goto :fail
 popd
-pushd "%ROOT%samples\VclBplPlugin" && "%DCC%" -B %NS% -U"%CORE%" -U"%BPLP%" -U"%BIN%" -U. VclBplPlugin.dpk || goto :fail
+pushd "%ROOT%samples\VclBplPlugin" && "%DCC%" -B %NS% -U"%CORE%" -U"%HOSTING%" -U"%BPLP%" -U"%BIN%" -U. VclBplPlugin.dpk || goto :fail
+popd
+
+echo [+] Building Oasis Showroom (six-scenario Cordis showcase GUI) + selftest...
+pushd "%ROOT%demos\VclShowroom" && "%DCC%" -B %NS% -LUrtl -LUvcl Showroom.dpr || goto :fail
+Showroom.exe /selftest
+if errorlevel 1 goto :fail
+type vclshowroom_selftest.txt
 popd
 
 echo.
