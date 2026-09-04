@@ -85,6 +85,49 @@ type
     constructor Create;
   end;
 
+  { Task 3: context-hook fixtures (populate-before-Apply, clear-on-teardown). }
+  FieldConsumerPlugin = class(TOasisPlugin)
+  strict private
+    [Inject] FGreet: IGreetService;
+  public
+    constructor Create;
+    procedure Apply(const Ctx: IContext); override;
+    function GreetFromField: string;
+    function FieldAssigned: Boolean;
+  end;
+
+  FailingApplyPlugin = class(TOasisPlugin)
+  strict private
+    [Inject] FGreet: IGreetService;
+  public
+    constructor Create;
+    procedure Apply(const Ctx: IContext); override;
+    function FieldAssigned: Boolean;
+  end;
+
+  { Closure-to-IPlugin adapter (Task 3 tests). }
+  TAnonymousPlugin = class(TInterfacedObject, IPlugin)
+  strict private
+    FName: string;
+    FApply: TProc<IContext>;
+  public
+    constructor Create(const AName: string; const AApply: TProc<IContext>);
+    function PluginName: string;
+    function Inject: TArray<TGUID>;
+    procedure Apply(const Ctx: IContext);
+  end;
+
+  [TestFixture]
+  TContextHookTests = class
+  public
+    [Test] procedure Mount_Fills_Field_Before_Apply;
+    [Test] procedure Unload_Clears_Fields;
+    [Test] procedure Apply_Failure_Clears_Fields_FsFailed;
+    [Test] procedure Reload_Refills_Fields;
+    [Test] procedure User_Cleanup_Still_Sees_Field;
+    [Test] procedure Closure_Plugin_Unaffected;
+  end;
+
   [TestFixture]
   TInjectorTests = class
   public
@@ -291,8 +334,176 @@ begin
   end;
 end;
 
+{ FieldConsumerPlugin / FailingApplyPlugin / TAnonymousPlugin }
+
+constructor FieldConsumerPlugin.Create;
+begin
+  inherited Create('field-consumer');
+end;
+
+procedure FieldConsumerPlugin.Apply(const Ctx: IContext);
+begin
+  { Apply 执行期间字段必须已填充 }
+  if FGreet = nil then
+    raise EOasisError.Create('field not populated during Apply');
+end;
+
+function FieldConsumerPlugin.GreetFromField: string;
+begin
+  Result := FGreet.Greet('ctx');
+end;
+
+function FieldConsumerPlugin.FieldAssigned: Boolean;
+begin
+  Result := FGreet <> nil;
+end;
+
+constructor FailingApplyPlugin.Create;
+begin
+  inherited Create('failing');
+end;
+
+procedure FailingApplyPlugin.Apply(const Ctx: IContext);
+begin
+  raise EOasisError.Create('boom');
+end;
+
+function FailingApplyPlugin.FieldAssigned: Boolean;
+begin
+  Result := FGreet <> nil;
+end;
+
+constructor TAnonymousPlugin.Create(const AName: string; const AApply: TProc<IContext>);
+begin
+  inherited Create;
+  FName := AName;
+  FApply := AApply;
+end;
+
+function TAnonymousPlugin.PluginName: string;
+begin
+  Result := FName;
+end;
+
+function TAnonymousPlugin.Inject: TArray<TGUID>;
+begin
+  Result := nil;
+end;
+
+procedure TAnonymousPlugin.Apply(const Ctx: IContext);
+begin
+  FApply(Ctx);
+end;
+
+{ TContextHookTests }
+
+procedure TContextHookTests.Mount_Fills_Field_Before_Apply;
+var
+  Ctx: IContext;
+  P: FieldConsumerPlugin;
+begin
+  Ctx := TContext.Create('t');
+  P := FieldConsumerPlugin.Create;
+  Ctx.Services.Register(IGreetService, TGreetServiceImpl.Create);
+  Ctx.Plugin(P);
+  Assert.IsTrue(P.FieldAssigned);
+  Assert.AreEqual(fsActive, Ctx.PluginState('field-consumer'));
+  Assert.AreEqual('Hello, ctx', P.GreetFromField);
+  Ctx.Dispose;
+end;
+
+procedure TContextHookTests.Unload_Clears_Fields;
+var
+  Ctx: IContext;
+  P: FieldConsumerPlugin;
+  PI: IInterface;   { 锚：Unload 删 entry 释放闭包引用，防 use-after-free }
+begin
+  Ctx := TContext.Create('t');
+  P := FieldConsumerPlugin.Create;
+  PI := P;
+  Ctx.Services.Register(IGreetService, TGreetServiceImpl.Create);
+  Ctx.Plugin(P);
+  Assert.IsTrue(Ctx.Unload('field-consumer'));
+  Assert.IsFalse(P.FieldAssigned);
+  Ctx.Dispose;
+end;
+
+procedure TContextHookTests.Apply_Failure_Clears_Fields_FsFailed;
+var
+  Ctx: IContext;
+  P: FailingApplyPlugin;
+begin
+  Ctx := TContext.Create('t');
+  P := FailingApplyPlugin.Create;
+  Ctx.Services.Register(IGreetService, TGreetServiceImpl.Create);
+  Ctx.Plugin(P);   { 失败被吞（fault isolation） }
+  Assert.AreEqual(fsFailed, Ctx.PluginState('failing'));
+  Assert.IsFalse(P.FieldAssigned);   { 回滚路径也清空 }
+  Ctx.Dispose;
+end;
+
+procedure TContextHookTests.Reload_Refills_Fields;
+var
+  Ctx: IContext;
+  P: FieldConsumerPlugin;
+begin
+  Ctx := TContext.Create('t');
+  P := FieldConsumerPlugin.Create;
+  Ctx.Services.Register(IGreetService, TGreetServiceImpl.Create);
+  Ctx.Plugin(P);
+  Ctx.Reload('field-consumer');
+  Assert.IsTrue(P.FieldAssigned);
+  Ctx.Dispose;
+end;
+
+procedure TContextHookTests.User_Cleanup_Still_Sees_Field;
+var
+  Ctx: IContext;
+  P: FieldConsumerPlugin;
+  SawFieldInCleanup: Boolean;
+begin
+  SawFieldInCleanup := False;
+  Ctx := TContext.Create('t');
+  P := FieldConsumerPlugin.Create;
+  Ctx.Services.Register(IGreetService, TGreetServiceImpl.Create);
+  { Brief deviation (see task-3 report): mount P so its field gets populated,
+    and read the field in the RETURNED disposer - TEffectScope.Add runs the
+    factory body at mount time and registers Result as the cleanup, so only
+    the disposer observes teardown. 'order-check' is disposed first (LIFO),
+    before P's fiber Clear runs: the user cleanup still sees the field. }
+  Ctx.Plugin(P);
+  Ctx.Plugin(
+    TAnonymousPlugin.Create('order-check',
+      procedure(C: IContext)
+      begin
+        C.Effect(
+          function: TDisposer
+          begin
+            Result := procedure begin SawFieldInCleanup := P.FieldAssigned; end;
+          end);
+      end));
+  Ctx.Dispose;   { 用户 cleanup 先于 Clear 执行（顺序契约） }
+  Assert.IsTrue(SawFieldInCleanup);
+end;
+
+procedure TContextHookTests.Closure_Plugin_Unaffected;
+var
+  Ctx: IContext;
+  LRan: Boolean;
+begin
+  LRan := False;
+  Ctx := TContext.Create('t');
+  Ctx.Plugin('plain-closure',
+    procedure(C: IContext)
+    begin
+      LRan := C.Services <> nil;
+    end);
+  Assert.IsTrue(LRan);
+  Ctx.Dispose;
+end;
 initialization
   TDUnitX.RegisterTestFixture(TInjectorTests);
   TDUnitX.RegisterTestFixture(TDeclarationMergeTests);
+  TDUnitX.RegisterTestFixture(TContextHookTests);
 
 end.
