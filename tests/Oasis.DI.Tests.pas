@@ -9,7 +9,7 @@ interface
 uses
   DUnitX.TestFramework, System.SysUtils,
   Oasis.Types, Oasis.Errors, Oasis.Services, Oasis.Inject, Oasis.Context,
-  Oasis.Plugin;
+  Oasis.Plugin, Oasis.Effects;
 
 type
   IGreetService = interface
@@ -146,6 +146,17 @@ type
   public
     [Test] procedure Inject_Merges_Manual_And_Field_Guids;
     [Test] procedure Inject_Result_Is_Cached_And_Stable;
+  end;
+
+  [TestFixture]
+  TFactoryTests = class
+  public
+    [Test] procedure Lazy_Builds_Exactly_Once;
+    [Test] procedure Factory_Has_True_Immediately_No_Build;
+    [Test] procedure Factory_Raise_Not_Memoized_Retry_Works;
+    [Test] procedure Overwrite_Latest_Wins_Old_Cleanup_Keeps_New;
+    [Test] procedure Parent_Child_Shadowing_With_Factory;
+    [Test] procedure Owner_Scope_Dispose_Releases_Factory_And_Memo;
   end;
 
 implementation
@@ -501,9 +512,133 @@ begin
   Assert.IsTrue(LRan);
   Ctx.Dispose;
 end;
+{ TFactoryTests }
+
+procedure TFactoryTests.Lazy_Builds_Exactly_Once;
+var
+  R: IServiceRegistry;
+  Builds: Integer;
+  A, B: IInterface;
+begin
+  R := TServiceRegistry.Create(nil);
+  Builds := 0;
+  R.RegisterFactory(IGreetService,
+    function: IInterface
+    begin
+      Inc(Builds);
+      Result := TGreetServiceImpl.Create;
+    end);
+  A := R.Get(IGreetService);
+  B := R.Get(IGreetService);
+  Assert.AreEqual(1, Builds);
+  Assert.IsTrue(A = B);
+end;
+
+procedure TFactoryTests.Factory_Has_True_Immediately_No_Build;
+var
+  R: IServiceRegistry;
+  Builds: Integer;
+begin
+  R := TServiceRegistry.Create(nil);
+  Builds := 0;
+  R.RegisterFactory(IGreetService,
+    function: IInterface
+    begin
+      Inc(Builds);
+      Result := TGreetServiceImpl.Create;
+    end);
+  Assert.IsTrue(R.Has(IGreetService));   { Has 绝不触发构建 }
+  Assert.AreEqual(0, Builds);
+end;
+
+procedure TFactoryTests.Factory_Raise_Not_Memoized_Retry_Works;
+var
+  R: IServiceRegistry;
+  { Brief deviation (capture discipline, see task-4 report): the closures below
+    must use the CLASS ref, not IServiceRegistry - all anonymous methods of a
+    routine share one $ActRec, so capturing R there would make the stored
+    factory closure transitively hold the registry (refcount cycle, leak). }
+  Reg: TServiceRegistry;
+  Builds: Integer;
+begin
+  Reg := TServiceRegistry.Create(nil);
+  R := Reg;
+  Builds := 0;
+  R.RegisterFactory(IGreetService,
+    function: IInterface
+    begin
+      Inc(Builds);
+      if Builds = 1 then
+        raise EOasisServiceFactoryError.Create('first build fails');
+      Result := TGreetServiceImpl.Create;
+    end);
+  Assert.WillRaise(
+    procedure var X: IInterface; begin X := Reg.Get(IGreetService); end,
+    EOasisServiceFactoryError);
+  Assert.WillNotRaise(
+    procedure var X: IInterface; begin X := Reg.Get(IGreetService); end);
+  Assert.AreEqual(2, Builds);
+end;
+
+procedure TFactoryTests.Overwrite_Latest_Wins_Old_Cleanup_Keeps_New;
+var
+  R: IServiceRegistry;
+  Scope1, Scope2: IEffectScope;
+  Second: IInterface;
+begin
+  { scope1 挂工厂 → scope2 以实例覆盖：scope1 的清理因 token 不匹配必须空转，
+    新条目保留到 scope2 自己卸载（spec 用例 18 的精确语义） }
+  R := TServiceRegistry.Create(nil);
+  Scope1 := TEffectScope.Create;
+  Scope2 := TEffectScope.Create;
+  R.SetOwnerScope(Scope1);
+  R.RegisterFactory(IGreetService, function: IInterface
+    begin Result := TGreetServiceImpl.Create; end);
+  R.SetOwnerScope(Scope2);
+  Second := TGreetServiceImpl.Create;
+  R.Register(IGreetService, Second);
+  R.SetOwnerScope(nil);
+  Scope1.Dispose;   { 旧工厂条目的清理不得删掉新条目 }
+  Assert.IsTrue(R.Has(IGreetService));
+  Assert.IsTrue(R.Get(IGreetService) = Second);
+  Scope2.Dispose;   { 新条目自己的清理正常生效 }
+  Assert.IsFalse(R.Has(IGreetService));
+end;
+
+procedure TFactoryTests.Parent_Child_Shadowing_With_Factory;
+var
+  RParent, RChild: IServiceRegistry;
+begin
+  RParent := TServiceRegistry.Create(nil);
+  RChild := TServiceRegistry.Create(RParent);
+  RParent.RegisterFactory(IGreetService, function: IInterface
+    begin Result := TGreetServiceImpl.Create; end);
+  RChild.Register(IGreetService, TGreetServiceImpl.Create);
+  Assert.IsTrue(RChild.Has(IGreetService));
+  Assert.IsTrue(RParent.Has(IGreetService));
+  { 子层实例遮蔽父层工厂；父层仍走工厂 }
+  Assert.IsFalse(RChild.Get(IGreetService) = RParent.Get(IGreetService));
+end;
+
+procedure TFactoryTests.Owner_Scope_Dispose_Releases_Factory_And_Memo;
+var
+  R: IServiceRegistry;
+  Scope: IEffectScope;
+begin
+  R := TServiceRegistry.Create(nil);
+  Scope := TEffectScope.Create;
+  R.SetOwnerScope(Scope);
+  R.RegisterFactory(IGreetService, function: IInterface
+    begin Result := TGreetServiceImpl.Create; end);
+  R.Get(IGreetService);   { 触发 memoize }
+  Scope.Dispose;
+  Assert.IsFalse(R.Has(IGreetService));   { fiber 卸载 → 注册消失 }
+end;
+
 initialization
   TDUnitX.RegisterTestFixture(TInjectorTests);
   TDUnitX.RegisterTestFixture(TDeclarationMergeTests);
   TDUnitX.RegisterTestFixture(TContextHookTests);
+  TDUnitX.RegisterTestFixture(TFactoryTests);
 
 end.
