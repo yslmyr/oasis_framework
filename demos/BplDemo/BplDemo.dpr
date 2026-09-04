@@ -22,6 +22,7 @@ uses
   Oasis.Effects in '..\..\src\Oasis.Core\Oasis.Effects.pas',
   Oasis.Services in '..\..\src\Oasis.Core\Oasis.Services.pas',
   Oasis.Events in '..\..\src\Oasis.Core\Oasis.Events.pas',
+  Oasis.Inject in '..\..\src\Oasis.Core\Oasis.Inject.pas',
   Oasis.Context in '..\..\src\Oasis.Core\Oasis.Context.pas',
   Oasis.Plugin in '..\..\src\Oasis.Core\Oasis.Plugin.pas',
   Oasis.Loader in '..\..\src\Oasis.Hosting\Oasis.Loader.pas',
