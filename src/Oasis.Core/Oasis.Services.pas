@@ -252,28 +252,36 @@ function TServiceRegistry.Resolve(const AGUID: TGUID; out AInstance: IInterface)
 var
   LEntry, LNow: TServiceEntry;
   LBuilt: IInterface;
+  LFound: Boolean;
 begin
+  LFound := False;
   { hot path: shared read lock - concurrent lookups do not block each other }
   FLock.EnterRead;
   try
-    if not FMap.TryGetValue(AGUID, LEntry) then
+    if FMap.TryGetValue(AGUID, LEntry) then
     begin
-      if FParent = nil then
-        Exit(False);
-      Exit(FParent.Resolve(AGUID, AInstance));
-    end;
-    if LEntry.Kind = skInstance then
-    begin
-      AInstance := LEntry.Instance;
-      Exit(True);
-    end;
-    if (LEntry.Kind = skLazySingleton) and (LEntry.Instance <> nil) then
-    begin
-      AInstance := LEntry.Instance;   { memoized already }
-      Exit(True);
+      LFound := True;
+      if LEntry.Kind = skInstance then
+      begin
+        AInstance := LEntry.Instance;
+        Exit(True);
+      end;
+      if (LEntry.Kind = skLazySingleton) and (LEntry.Instance <> nil) then
+      begin
+        AInstance := LEntry.Instance;   { memoized already }
+        Exit(True);
+      end;
     end;
   finally
     FLock.LeaveRead;
+  end;
+  if not LFound then
+  begin
+    if FParent = nil then
+      Exit(False);
+    { parent delegation with NO local lock held: a parent-side factory must
+      never build under the child's read lock (plan global constraint) }
+    Exit(FParent.Resolve(AGUID, AInstance));
   end;
   { factory entries: build WITHOUT holding the lock; thread-local circular guard }
   LBuilt := BuildGuarded(AGUID, LEntry.Factory);

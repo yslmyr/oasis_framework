@@ -157,6 +157,7 @@ type
     [Test] procedure Overwrite_Latest_Wins_Old_Cleanup_Keeps_New;
     [Test] procedure Parent_Child_Shadowing_With_Factory;
     [Test] procedure Owner_Scope_Dispose_Releases_Factory_And_Memo;
+    [Test] procedure Parent_Factory_Resolves_Through_Child;
   end;
 
 implementation
@@ -618,6 +619,24 @@ begin
   Assert.IsTrue(RParent.Has(IGreetService));
   { 子层实例遮蔽父层工厂；父层仍走工厂 }
   Assert.IsFalse(RChild.Get(IGreetService) = RParent.Get(IGreetService));
+end;
+
+procedure TFactoryTests.Parent_Factory_Resolves_Through_Child;
+var
+  RParent, RChild: IServiceRegistry;
+  Builds: Integer;
+begin
+  Builds := 0;
+  RParent := TServiceRegistry.Create(nil);
+  RChild := TServiceRegistry.Create(RParent);
+  RParent.RegisterFactory(IGreetService,
+    function: IInterface
+    begin
+      Inc(Builds);
+      Result := TGreetServiceImpl.Create;
+    end);
+  Assert.AreEqual('Hello, need', (RChild.Get(IGreetService) as IGreetService).Greet('need'));
+  Assert.AreEqual(1, Builds);   { 子层 miss → 父层工厂构建且 memoize 一次 }
 end;
 
 procedure TFactoryTests.Owner_Scope_Dispose_Releases_Factory_And_Memo;
