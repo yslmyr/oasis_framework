@@ -517,6 +517,27 @@ mORMot2 大量单元级全局状态（`TInterfaceFactory` 注册表、日志、C
    fiber 并保留 fsFailed 条目（Oasis.Context.pas:278-290）——§3.3 的
    fiber-cleanup 清理方案由此外推，四条拆卸路径共用同一 LIFO 机制。
 
+---
+
+## 附录 B：执行期勘误（2026-09-05，feat/di 实现与两轮任务评审裁决）
+
+1. **B.1 §5.2 正向桥映射**：草图「复用 §4 懒单例（RegisterFactory）」错误——
+   mORMot 类注册是**每次解析新建**，懒单例 memoize 会把「每次新」冻结成
+   「永久一」，违反本节主导语义「sic* 生命周期完全由 mORMot 容器自管」。
+   实现改为 `RegisterTransient`（每次 Get 穿透解析；共享实例路径每次返回
+   同一实例，语义不变）。
+2. **B.2 §5.3 反向桥赋值**：`IInterface(Obj) := LInst` 是附录 A.2 裸拷贝陷阱
+   的镜像（IInterface 条目指针写入调用方具体接口槽位 → 方法调用 AV，
+   实测复现）。实现改为 `QueryInterface` 透传（以请求接口的 GUID 换出正确
+   vtable 条目，恰好一次 `_AddRef` 交调用方）。
+3. **B.3 §7.1 计数**：44+21=65 为逻辑用例口径；实现展开为 30 个测试方法
+   + Task 4 评审补 1 个父链回归用例 = 44+31 = **75**。mormot runner 8 用例。
+4. **B.4 执行新知**：dcc32 37.0 下 `IInterface` 的 RTTI 自带 IUnknown GUID
+   （无 GUID 测试接口须用户自声明）；Delphi 同作用域匿名方法共享 `$ActRec`
+   （任何兄弟闭包捕接口形态注册表都会使存储闭包成环）；包编译 `-E` 不重
+   定向 .bpl/.dcp（需 `-LE/-LN`）；`Resolve` 父链委托必须在 `LeaveRead` 之后
+   （计划清单中的回归，评审捕获后修复）。
+
 **二轮审查（v3 修订依据）新增证据**：
 
 9. **A.9** 清理顺序契约坐实：`AddDisposable` 即 `AddCleanup` 包装
