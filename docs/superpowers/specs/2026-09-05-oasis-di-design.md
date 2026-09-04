@@ -537,6 +537,10 @@ mORMot2 大量单元级全局状态（`TInterfaceFactory` 注册表、日志、C
    （任何兄弟闭包捕接口形态注册表都会使存储闭包成环）；包编译 `-E` 不重
    定向 .bpl/.dcp（需 `-LE/-LN`）；`Resolve` 父链委托必须在 `LeaveRead` 之后
    （计划清单中的回归，评审捕获后修复）。
+5. **B.5 §9 提取失败时机措辞**：风险表称 `IPlugin as TObject` 失败「在 wrapper
+   闭包内抛」，实际（§3.3 草图与实现一致）提取发生在 `MountUnderFreshFiber`
+   之前、异常从 `TContext.Plugin`/`THost.Mount` 直接抛出（不走 fsFailed）。
+   实现与草图一致，风险表措辞以本条为准。
 
 **二轮审查（v3 修订依据）新增证据**：
 

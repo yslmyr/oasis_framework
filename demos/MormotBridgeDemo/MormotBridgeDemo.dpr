@@ -4,9 +4,9 @@
 
 { Oasis demo - mORMot2 DI bridge, both directions (ConsoleDemo style).
 
-  Forward: a standalone TInterfaceResolverList (shared instance + transient
-  class registration) is mirrored into Oasis as lazy factories; a consumer
-  plugin gets it via [Inject]; unloading the bridge cascades the consumer.
+  Forward: a standalone TInterfaceResolverList holding one shared instance is
+  mirrored into Oasis as per-resolve factories; a consumer plugin gets it via
+  [Inject]; unloading the bridge cascades the consumer.
   Reverse: a mORMot TInterfaceResolverInjected resolves an Oasis-registered
   service through TOasisResolver.
 

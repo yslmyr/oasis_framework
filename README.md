@@ -41,10 +41,13 @@ Oasis brings Cordis's core design ideas to Delphi:
   host fills it before `Apply` and nils it on deactivate/reload — declaration
   merges with `AddInject`); factory lifetimes `RegisterFactory` (lazy
   singleton: dependency probes never trigger builds) / `RegisterTransient`;
-  typed pull helper `TOasisDI.Need<T>`. Optional **mORMot2 bridge** unit
-  `Oasis.Mormot` (MIT/MPL boundary: uses-only, zero copied code):
-  `TMormotServicesPlugin` mirrors a mORMot container into Oasis as lazy
-  factories (unload cascades), `TOasisResolver` exposes the Oasis registry
+  typed pull helper `TOasisDI.Need<T>`. A transient service injected into a
+  field gives the plugin ONE fresh instance per activation (Apply), held
+  until its fiber tears down — not a new instance per access. Optional
+  **mORMot2 bridge** unit `Oasis.Mormot` (MIT/MPL boundary: uses-only, zero
+  copied code): `TMormotServicesPlugin` mirrors a mORMot container into
+  Oasis as per-resolve factories (the container keeps owning sic* lifetimes;
+  unload cascades), `TOasisResolver` exposes the Oasis registry
   to mORMot-side DI. Constraint (spec §3.4/N4): a field-injected plugin
   instance must be mounted at most once.
 - **Config** — `TJsonConfigPlugin` registers an `IOasisConfig` service
@@ -139,7 +142,7 @@ The Delphi 13 toolchain is used directly (`dcc32`). From the respective folder:
 ```bash
 # tests (DUnitX console runner) — from tests/
 dcc32 -B -U"<BDS>\source\DunitX" Oasis.Tests.dpr
-Oasis.Tests.exe            # expect: Tests Passed: 25, Failed: 0, Errored: 0
+Oasis.Tests.exe            # expect: Tests Passed: 75, Failed: 0, Errored: 0
 
 # demo — from demos/ConsoleDemo/
 dcc32 -B ConsoleDemo.dpr
