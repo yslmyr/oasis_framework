@@ -16,6 +16,7 @@ uses
   Oasis.Events in '..\src\Oasis.Core\Oasis.Events.pas',
   Oasis.Context in '..\src\Oasis.Core\Oasis.Context.pas',
   Oasis.Plugin in '..\src\Oasis.Core\Oasis.Plugin.pas',
+  Oasis.Inject in '..\src\Oasis.Core\Oasis.Inject.pas',
   Oasis.Loader in '..\src\Oasis.Hosting\Oasis.Loader.pas',
   Oasis.Host in '..\src\Oasis.Hosting\Oasis.Host.pas',
   Oasis.Config in '..\src\Oasis.Hosting\Oasis.Config.pas',
@@ -26,6 +27,7 @@ uses
   Oasis.Hosting.Tests in 'Oasis.Hosting.Tests.pas',
   Oasis.Config.Tests in 'Oasis.Config.Tests.pas',
   Oasis.UI in '..\src\Oasis.UI\Oasis.UI.pas',
+  Oasis.DI.Tests in 'Oasis.DI.Tests.pas',
   Oasis.UI.Tests in 'Oasis.UI.Tests.pas',
   Oasis.Parity.Tests in 'Oasis.Parity.Tests.pas';
 
