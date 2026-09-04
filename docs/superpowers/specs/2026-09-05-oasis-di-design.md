@@ -1,16 +1,21 @@
 # Oasis IoC/DI 集成设计（自动注入 + 工厂生命周期 + mORMot2 桥接）
 
-- **状态**：📋 设计定稿 **v2**（对抗审查修订版），待实现
+- **状态**：📋 设计定稿 **v3**（二轮对抗审查修订版），待实现
 - **日期**：2026-09-05（v1 设计定稿并提交；同日对抗审查后出 v2）
 - **目标 Delphi 版本**：10.4 Sydney 及以上（以 Delphi 13 Florence 编译验证）
 - **参考**：本地 mORMot2 checkout（`D:\code\awesome-pascal\mormot2`，注意新版单元已由
   `mormot.svc.*` 更名 `mormot.soa.*`）；Cordis/Koishi 的 `inject` 声明语义；
   Spring4D（仅作可行性参考，Apache-2.0，零拷贝）
-- **修订记录**：v1 = commit `ed1f19e`。v2 依据对抗审查（源码取证 + 5 轮 dcc32
-  编译证明，见附录 A）修订：`Has`/`DepsSatisfied` 语义（F1）、注入实现锁定为
-  已验证配方（F2）、桥所有权（F3）、Clear 改为 fiber cleanup（F4，撤销 v1 的
-  `TPluginEntry.Plugin` 方案）、闭包捕获纪律（F5）、并发双检语义（F6）、
-  mORMot 约束（F7）。
+- **修订记录**：v1 = commit `ed1f19e`。v2 = commit `875d557`，依据一轮对抗审查
+  （源码取证 + 5 轮 dcc32 编译证明，见附录 A）修订：`Has`/`DepsSatisfied`
+  语义（F1）、注入实现锁定为已验证配方（F2）、桥所有权（F3）、Clear 改为
+  fiber cleanup（F4，撤销 v1 的 `TPluginEntry.Plugin` 方案）、闭包捕获纪律
+  （F5）、并发双检语义（F6）、mORMot 约束（F7）。v3 依据二轮对抗审查修订：
+  **桥引用计数所有权**（N1——正向闭包「接收即接管」，反向接口赋值，两侧
+  分写）、**工厂失败 × 消费者 fsFailed 失效模式与恢复路径文档化**（N2）、
+  `Inject` 合并结果惰性缓存（N3）、同实例多挂约束（N4）、Supports 失配
+  用例（N5）；新增证据 V9（清理顺序契约由 Effects 实现坐实）、V10（继承
+  字段注入可行，rttiproof6）。
 
 ---
 
@@ -55,6 +60,7 @@ Oasis 已有「GUID 服务注册表 + `AddInject` 声明依赖 + 激活等待/�
 | Has 语义 | **`Has` 重定义为注册条目存在性检查**（含父链、绝不调用工厂）；**`THost.DepsSatisfied` 改用 `Has`**——现实现 `DepsSatisfied` 用 `Resolve`、`Has` 是 `Resolve` 别名（附录 A.8），不改则懒单例的「懒」在依赖判定时即被击穿 |
 | 桥主通道 | `TInterfaceResolver.Resolve(PRttiInfo, out Obj)`——`TInterfaceResolverList` / `TInterfaceResolverInjected` / `TServiceContainer` 通吃 |
 | 桥所有权 | `TMormotServicesPlugin.Create(..., AOwnsResolver: Boolean = False)`——独立 `TInterfaceResolverList` 传 True；`TRestServer.Services` 等外部所有场景保持 False |
+| 桥引用计数 | mORMot `Resolve` 约定「返回已 `_AddRef` 一次、调用者接管」（附录 A.11）——正向闭包**接收即接管、原样返回**（`IInterface` 局部变量直收 untyped out，全程禁止接口/指针中转转换）；反向 `TOasisResolver` 用接口赋值写 untyped out，天然对齐；两侧**必须分写** |
 | mORMot 许可边界 | 桥单元**只 uses、零拷贝**（mORMot2 为 MPL 1.1，Oasis 为 MIT）；桥不进默认构建，build.cmd 检测到本地 mormot2 才编译 |
 | `Oasis.Mormot` 形态 | **纯单元、不做 .dpk**：mormot 大量单元级全局状态（TInterfaceFactory 注册表等），编进 BPL 与宿主静态链接并存会复制全局态；宿主静态链接进自身 |
 | 单元依赖 | `Oasis.Inject` 只依赖 `Oasis.Types`/`Oasis.Services`/`Oasis.Errors`（`Populate` 收 `TObject`），**与 `Oasis.Context` 无循环**；`Oasis.Context` 在 implementation 段调用注入器 |
@@ -144,6 +150,9 @@ PIInterface(PByte(APlugin) + LField.Offset)^ := LConv;
   取不到抛 `EOasisServiceNotFound`，`TryNeed` 返回 False。
 - **`FieldGuids`** 按类缓存（首次扫描后存入类级字典；**初始化需加锁**——
   两个线程并发首次挂载不同插件类时无锁写入字典会竞态）。
+  `TRttiType.GetFields` **含继承层级字段**（基类与派生类一次返回、offset 各自
+  正确，已实测 rttiproof6，附录 A.10）——插件基类可声明公共 `[Inject]` 字段，
+  扫描无需逐层遍历。
 
 ### 3.3 时序与故障语义（v2 重写：清理走 fiber cleanup）
 
@@ -163,7 +172,9 @@ begin
       C.Effects.AddDisposable(LPlugin);            { 注册序 1 → 执行序末：插件对象最后释放 }
       C.Effects.AddCleanup(procedure begin TOasisInjector.Clear(LObj) end);
         { 注册序 2 → 执行序倒数第二：用户 cleanup 之后、插件释放之前清空字段。
-          清理顺序是本设计的契约：用户清理(仍可用字段) → Clear → 释放插件对象 }
+          清理顺序是本设计的契约：用户清理(仍可用字段) → Clear → 释放插件对象。
+          契约已由实现坐实：AddDisposable 即 AddCleanup 包装、共用同一 LIFO 栈
+          （Oasis.Effects.pas:154-157，附录 A.9） }
       TOasisInjector.Populate(LObj, C.Services);   { Apply 前填充；失败即抛 }
       LPlugin.Apply(C);
     end, nil);
@@ -172,7 +183,7 @@ end;
 
 | 时机 | 行为 |
 |---|---|
-| 声明收集 | `TOasisPlugin.Inject` 基类改为：`AddInject` 手动 GUID ∪ `TOasisInjector.FieldGuids(ClassType)`（虚方法重载点保留，子类仍可加逻辑） |
+| 声明收集 | `TOasisPlugin.Inject` 基类改为：`AddInject` 手动 GUID ∪ `TOasisInjector.FieldGuids(ClassType)`（虚方法重载点保留，子类仍可加逻辑）。**合并结果在基类内惰性缓存**（v3/N3）——`DepsSatisfied` 每次 rescan（每次服务注册）对每个插件调 `Inject`，不缓存则 O(插件数×注册数) 次数组合并分配；`AddInject` 仅构造期调用，缓存无失效问题 |
 | 填充 | wrapper 闭包内、`Apply` 之前（依赖判定已由 `DepsSatisfied`→`Has` 完成，不触发构建） |
 | 注入失败 | `Populate` 抛 `EOasisInjectError` → 走现有 `MountUnderFreshFiber` 故障隔离（fsFailed + fiber 回滚 + `EV_HOST_PLUGIN_FAILED`）；**回滚 Dispose 会执行已注册的 Clear cleanup，已填字段全部清 nil** |
 | 四条拆卸路径 | 失败回滚 / 级联去活（`Unload`）/ `Reload(name)` / `Reload`/`Dispose`——全部经由 `fiber.Dispose` 的 LIFO cleanup：**用户清理（仍可用字段）→ Clear → 释放插件对象**，一次注册全覆盖 |
@@ -186,6 +197,10 @@ end;
 - `[Inject]` 字段必须是**带 GUID 的接口类型**；否则 `Populate` 抛
   `EOasisInjectError`（新异常类，归 `Oasis.Errors`）。
 - BPL 插件同样适用（RTTI 随插件编译，注册表查找跨 BPL 无碍）。
+- **同一插件实例挂载多次（多名字/多 fiber）与字段注入不兼容**（v3/N4）：
+  任一 fiber 卸载执行 Clear 会清掉**同一对象的同一批字段**，其余 fiber 的
+  Apply 假设失效。文档约束：字段注入插件每实例至多挂载一次；需要多实例请
+  多次 `Create`（框架现状本就不鼓励同实例重复挂载）。
 
 ---
 
@@ -211,6 +226,14 @@ procedure RegisterTransient(const AGUID: TGUID; AFactory: TFunc<IInterface>);
 **transient × `[Inject]` 字段的语义**：`Populate` 每字段做一次 `Resolve`——
 transient 服务在插件**每次 Apply（激活/重激活）获得一个新实例**并持有到该
 fiber 拆卸；不是「字段每次访问都换」。文档明示。
+
+**工厂构建失败的消费者侧失效模式（v3/N2 文档化）**：构建被推迟到
+`Populate`（依赖判定不构建），首次真实构建发生在 fiber 内。工厂抛
+`EOasisServiceFactoryError` 时消费者回滚为 fsFailed——而
+`THost.RescanPending` 的失败路径只记 `FailedPlugins`、**不 requeue**
+（Host.pas:178-185），因此 provider 侧重挂/`Reload` 触发的 `OnServiceAdded`
+**不会自动复活它**；唯一恢复路径是 `Reload(消费者名)` 或全量 `Reload`
+（重跑 wrapper 闭包，工厂已修复则复活、字段重填）。§7.1-20/21 覆盖。
 
 ### 4.3 实现要点
 
@@ -286,6 +309,20 @@ Host.Mount(TMormotServicesPlugin.Create(
 `TInterfaceResolverList` 场景）；`False`（默认）时不释放（`TRestServer.Services`
 等外部所有场景）。demo/测试按场景显式传值。
 
+**引用计数所有权（v3/N1 新增）**：mORMot `TInterfaceResolver.Resolve` 的
+约定是**返回值已 `_AddRef` 一次、调用者接管**（共享实例路径
+`IInterface(Obj) := e^.Instance`，源码注释明言；类注册新建实例同语义，
+附录 A.11）。因此：
+
+- **正向桥解析闭包**：以 `LInst: IInterface` 局部变量**直收** `Resolve` 的
+  untyped out 参数（这一次 `_AddRef` 即被接管），并**原样作为工厂结果返回**；
+  注册表条目 memoize 工厂结果，条目销毁随接口引用释放——全链平衡。全程
+  **禁止任何接口↔指针中转转换**（`IInterface(...)`/`Pointer(...)` 搬运是
+  计数漂移之源，附录 A.2 同族陷阱）。
+- **反向桥 `TOasisResolver.TryResolve`**：`IInterface(Obj) := <注册表取出的
+  接口>`——untyped out 的接口赋值增一次计数并交给调用方，与 mORMot 约定
+  天然对齐。两侧写法**不对称且都必须**，不得抽成共用转换助手。
+
 - `Apply` 内：对每个 `PRttiInfo` 取 GUID → `Ctx.Services.RegisterFactory(
   GUID, 解析闭包)`——**复用 §4 懒单例**，首次解析才穿透到 mORMot，
   `sic*` 生命周期完全由 mORMot 容器自管（桥不复制语义）。
@@ -357,13 +394,21 @@ mORMot2 大量单元级全局状态（`TInterfaceFactory` 注册表、日志、C
 13. transient × `[Inject]` 字段：一次 Apply 持有同实例（语义明示项）
 14. 工厂抛异常 → `EOasisServiceFactoryError`；懒单例失败不 memoize，重试成功
 15. 工厂递归自解析 → circular 错误（不死锁）
-16. **父/子上下文 shadowing**：子上下口覆盖工厂 GUID 后孙辈解析到子层实现，
+16. **父/子上下文 shadowing**：子上下文覆盖工厂 GUID 后孙辈解析到子层实现，
     父层消费者不受影响
 17. fiber 卸载：工厂条目注销、memo 实例与闭包释放（`ReportMemoryLeaksOnShutdown`）；
     **重激活（级联往返）后无引用泄漏**
 18. 覆盖注册（同 GUID 二次 Register/Factory）为最新者，旧 cleanup 不误删新条目
+19. **Supports 运行时失配**（v3/N5）：注册的实例不实现 `[Inject]` 字段接口 →
+    `Populate` 抛 `EOasisInjectError` → 消费者 fsFailed（区别于用例 6 的
+    声明期错误）
+20. **工厂失败的消费者失效模式**（v3/N2）：懒工厂首次解析抛异常 → 消费者
+    fsFailed 且字段清空；此后 provider 重挂（`OnServiceAdded` → rescan）
+    **不自动复活**（不在 pending 队列）
+21. **恢复路径**（v3/N2）：`Reload(消费者名)` 重跑 wrapper → 工厂已修复 →
+    fsActive 复活、字段重填、构建计数递增成功
 
-预期 **44 + 18 = 62** 项全绿（现有用例零改动）。
+预期 **44 + 21 = 65** 项全绿（现有用例零改动）。
 
 ### 7.2 `tests/mormot/Oasis.Mormot.Tests.dpr`（独立 runner，仿 `tests/otl`）
 
@@ -375,6 +420,8 @@ mORMot2 大量单元级全局状态（`TInterfaceFactory` 注册表、日志、C
 5. 解析失败（resolver 无此接口）→ `EOasisServiceFactoryError`
 6. 内存泄漏检查（`AOwnsResolver=True` 桥释放容器 / `=False` 不释放，
    两种取值各验一遍）
+7. 引用计数回归（v3/N1）：共享实例镜像下连续解析 N 次（N≥3）零泄漏——
+   「接收即接管」纪律的回归锚点
 
 缺 mormot2 路径时 runner 构建脚本整体 SKIP（`build.cmd` 打印提示），
 不算失败。
@@ -410,6 +457,8 @@ mORMot2 大量单元级全局状态（`TInterfaceFactory` 注册表、日志、C
 | mORMot2 新旧单元名双轨（svc/soa） | 以本机新版 `mormot.soa.*` 为准；桥仅在 uses 处出现单元名，README 注明最低版本要求 |
 | 懒单例工厂持锁调用 → 死锁 | §4.3 锁纪律 + 用例 15 覆盖 |
 | 并发重复构建浪费 | 已定语义（§4.3 最后写入为准），非开放风险 |
+| 工厂失败后消费者滞留 fsFailed | 已文档化（§4.2 失效模式 + §7.1-20/21 恢复路径），非开放风险 |
+| 桥解析引用计数漂移 | 已立规（§5.2 引用计数所有权，两侧分写 + §7.2-7 回归），非开放风险 |
 
 ---
 
@@ -424,7 +473,7 @@ mORMot2 大量单元级全局状态（`TInterfaceFactory` 注册表、日志、C
 
 ## 附录 A：对抗审查证据（2026-09-05，v2 的修订依据）
 
-证明程序：`C:\Users\yslmy\AppData\Local\Temp\oasis-rttiproof\rttiproof1..5.dpr`
+证明程序：`C:\Users\yslmy\AppData\Local\Temp\oasis-rttiproof\rttiproof1..6.dpr`
 （dcc32 37.0 / Delphi 13 Florence 编译运行；实现期可搬入 `tests/` 作回归）。
 源码取证基于 Oasis 当前 main（commit `29b1c54`）。
 
@@ -467,3 +516,20 @@ mORMot2 大量单元级全局状态（`TInterfaceFactory` 注册表、日志、C
    （Oasis.Host.pas:229-242）；`MountUnderFreshFiber` 失败分支 Dispose
    fiber 并保留 fsFailed 条目（Oasis.Context.pas:278-290）——§3.3 的
    fiber-cleanup 清理方案由此外推，四条拆卸路径共用同一 LIFO 机制。
+
+**二轮审查（v3 修订依据）新增证据**：
+
+9. **A.9** 清理顺序契约坐实：`AddDisposable` 即 `AddCleanup` 包装
+   （`AddCleanup(procedure begin AObj := nil; end)`，Oasis.Effects.pas:154-157），
+   两者共用同一 `TStack<TEntry>`，`Dispose` 严格逆序弹出且不持锁执行用户
+   清理（Oasis.Effects.pas:159-194）——§3.3「用户清理 → Clear → 插件释放」
+   次序由实现保证，非假设。
+10. **A.10** 继承字段注入可行（rttiproof6 编译运行全绿）：`GetFields` 一次
+    返回全层级字段（基类 `FBaseGreeter` offset=12 / 派生类 `FDerivedGreeter`
+    offset=16，`Field.Parent` 各自正确），offset 写入 + 两字段调用 + Free
+    零泄漏。
+11. **A.11** mORMot 引用计数约定（源码取证）：`TInterfaceResolverList.TryResolve`
+    对共享实例执行 `IInterface(Obj) := e^.Instance`，注释明言
+    "will increase the reference count of the shared instance"；类注册路径
+    `ClassNewInstance + GetInterfaceFromEntry` 同为「一次计数交调用者」——
+    §5.2 引用计数所有权规则（正向接收即接管 / 反向接口赋值）的事实基础。
