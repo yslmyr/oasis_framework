@@ -9,7 +9,7 @@ interface
 uses
   DUnitX.TestFramework, System.SysUtils,
   Oasis.Types, Oasis.Errors, Oasis.Services, Oasis.Inject, Oasis.Context,
-  Oasis.Plugin, Oasis.Effects;
+  Oasis.Plugin, Oasis.Effects, Oasis.Loader, Oasis.Host;
 
 type
   IGreetService = interface
@@ -117,6 +117,26 @@ type
     procedure Apply(const Ctx: IContext);
   end;
 
+  { Task 5: transient field consumer + a provider whose first build fails. }
+  TransientConsumerPlugin = class(TOasisPlugin)
+  strict private
+    [Inject] FGreet: IGreetService;
+  public
+    constructor Create;
+    procedure Apply(const Ctx: IContext); override;
+    function FieldAssigned: Boolean;
+    function GreetFromField: string;
+  end;
+
+  FlakyProviderPlugin = class(TOasisPlugin)
+  strict private
+    class var FFailFirst: Boolean;
+  public
+    constructor Create;
+    procedure Apply(const Ctx: IContext); override;
+    class property FailFirst: Boolean read FFailFirst write FFailFirst;
+  end;
+
   [TestFixture]
   TContextHookTests = class
   public
@@ -158,6 +178,24 @@ type
     [Test] procedure Parent_Child_Shadowing_With_Factory;
     [Test] procedure Owner_Scope_Dispose_Releases_Factory_And_Memo;
     [Test] procedure Parent_Factory_Resolves_Through_Child;
+  end;
+
+  [TestFixture]
+  TTransientTests = class
+  public
+    [Test] procedure Transient_New_Instance_Every_Get;
+    [Test] procedure Circular_Factory_Raises;
+    [Test] procedure Transient_Field_Holds_One_Instance_Per_Apply;
+  end;
+
+  [TestFixture]
+  THostActivationTests = class
+  public
+    [Test] procedure Pending_Consumer_Activates_When_Provider_Mounts;
+    [Test] procedure DepsSatisfied_Does_Not_Trigger_Factory_Build;
+    [Test] procedure Cascade_Deactivate_Nils_Fields;
+    [Test] procedure Factory_Failure_Consumer_FsFailed_Not_Revived_By_Rescan;
+    [Test] procedure Reload_Consumer_Revives_After_Factory_Fixed;
   end;
 
 implementation
@@ -654,10 +692,251 @@ begin
   Assert.IsFalse(R.Has(IGreetService));   { fiber 卸载 → 注册消失 }
 end;
 
+{ TransientConsumerPlugin / FlakyProviderPlugin (Task 5) }
+
+constructor TransientConsumerPlugin.Create;
+begin
+  inherited Create('transient-consumer');
+end;
+
+procedure TransientConsumerPlugin.Apply(const Ctx: IContext);
+begin
+  if FGreet = nil then
+    raise EOasisError.Create('nope');
+end;
+
+function TransientConsumerPlugin.FieldAssigned: Boolean;
+begin
+  Result := FGreet <> nil;
+end;
+
+function TransientConsumerPlugin.GreetFromField: string;
+begin
+  Result := FGreet.Greet('t');
+end;
+
+constructor FlakyProviderPlugin.Create;
+begin
+  inherited Create('flaky');
+end;
+
+procedure FlakyProviderPlugin.Apply(const Ctx: IContext);
+begin
+  if FFailFirst then
+  begin
+    FFailFirst := False;
+    Ctx.Services.RegisterFactory(IGreetService,
+      function: IInterface
+      begin
+        raise EOasisServiceFactoryError.Create('flaky first build');
+      end);
+  end
+  else
+    Ctx.Services.Register(IGreetService, TGreetServiceImpl.Create);
+end;
+
+{ TTransientTests }
+
+procedure TTransientTests.Transient_New_Instance_Every_Get;
+var
+  R: IServiceRegistry;
+  Builds: Integer;
+  A, B: IInterface;
+begin
+  R := TServiceRegistry.Create(nil);
+  Builds := 0;
+  R.RegisterTransient(IGreetService,
+    function: IInterface
+    begin
+      Inc(Builds);
+      Result := TGreetServiceImpl.Create;
+    end);
+  A := R.Get(IGreetService);
+  B := R.Get(IGreetService);
+  Assert.AreEqual(2, Builds);
+  Assert.IsFalse(A = B);
+end;
+
+procedure TTransientTests.Circular_Factory_Raises;
+var
+  R: TServiceRegistry;   { captured by the closures as a class ref (capture discipline) }
+  Reg: IServiceRegistry; { ownership anchor - releases the registry at scope exit,
+    same pattern as Factory_Raise_Not_Memoized_Retry_Works above }
+begin
+  R := TServiceRegistry.Create(nil);
+  Reg := R;
+  R.RegisterFactory(IGreetService,
+    function: IInterface
+    begin
+      Result := R.Get(IGreetService);   { self-resolve -> circular build guard raises }
+    end);
+  Assert.WillRaise(
+    procedure var X: IInterface; begin X := R.Get(IGreetService); end,
+    EOasisServiceFactoryError);
+end;
+
+procedure TTransientTests.Transient_Field_Holds_One_Instance_Per_Apply;
+var
+  Host: THost;
+  P: TransientConsumerPlugin;
+  G1, G2: string;
+begin
+  Host := THost.Create;
+  try
+    P := TransientConsumerPlugin.Create;
+    Host.Mount(TAnonymousPlugin.Create('t-provider',
+      procedure(C: IContext)
+      begin
+        C.Services.RegisterTransient(IGreetService,
+          function: IInterface
+          begin
+            Result := TGreetServiceImpl.Create;
+          end);
+      end));
+    Host.Mount(P);
+    Host.Start;
+    G1 := P.GreetFromField;
+    Host.Root.Reload('transient-consumer');
+    G2 := P.GreetFromField;   { reload gets a fresh instance, stable within one Apply }
+    Assert.AreEqual('Hello, t', G1);
+    Assert.AreEqual('Hello, t', G2);
+    Host.Shutdown;
+  finally
+    Host.Free;
+  end;
+end;
+
+{ THostActivationTests }
+
+procedure THostActivationTests.Pending_Consumer_Activates_When_Provider_Mounts;
+var
+  Host: THost;
+  P: FieldConsumerPlugin;
+begin
+  Host := THost.Create;
+  try
+    P := FieldConsumerPlugin.Create;
+    Host.Mount(P);                       { no service yet -> pending }
+    Host.Mount(TAnonymousPlugin.Create('provider',
+      procedure(C: IContext)
+      begin
+        C.Services.Register(IGreetService, TGreetServiceImpl.Create);
+      end));
+    Host.Start;
+    Assert.AreEqual('Hello, ctx', P.GreetFromField);   { activated, field populated }
+    Host.Shutdown;
+  finally
+    Host.Free;
+  end;
+end;
+
+procedure THostActivationTests.DepsSatisfied_Does_Not_Trigger_Factory_Build;
+var
+  Host: THost;
+  Builds: Integer;
+begin
+  Host := THost.Create;
+  try
+    Host.Mount(TAnonymousPlugin.Create('factory-provider',
+      procedure(C: IContext)
+      begin
+        C.Services.RegisterFactory(IGreetService,
+          function: IInterface
+          begin
+            Inc(Builds);
+            Result := TGreetServiceImpl.Create;
+          end);
+      end));
+    Host.Mount(FieldConsumerPlugin.Create);   { dep probing must go through Has -> no build }
+    Host.Start;
+    Assert.AreEqual(1, Builds);   { only the Populate resolve builds }
+    Host.Shutdown;
+  finally
+    Host.Free;
+  end;
+end;
+
+procedure THostActivationTests.Cascade_Deactivate_Nils_Fields;
+var
+  Host: THost;
+  P: FieldConsumerPlugin;
+  PI: IInterface;   { anchor: cascade unload deletes the entry -> releases the plugin }
+begin
+  Host := THost.Create;
+  try
+    P := FieldConsumerPlugin.Create;
+    PI := P;
+    Host.Mount(TAnonymousPlugin.Create('provider',
+      procedure(C: IContext)
+      begin
+        C.Services.Register(IGreetService, TGreetServiceImpl.Create);
+      end));
+    Host.Mount(P);
+    Host.Start;
+    Assert.IsTrue(P.FieldAssigned);
+    Host.Root.Unload('provider');   { cascade deactivates the consumer }
+    Assert.IsFalse(P.FieldAssigned);
+    Host.Shutdown;
+  finally
+    Host.Free;
+  end;
+end;
+
+procedure THostActivationTests.Factory_Failure_Consumer_FsFailed_Not_Revived_By_Rescan;
+var
+  Host: THost;
+begin
+  Host := THost.Create;
+  try
+    FlakyProviderPlugin.FailFirst := True;
+    Host.Mount(FlakyProviderPlugin.Create);
+    Host.Mount(FieldConsumerPlugin.Create);   { first factory build raises -> fsFailed }
+    Host.Start;
+    Assert.AreEqual(fsFailed, Host.PluginState('field-consumer'));
+    { provider remount fires OnServiceAdded -> rescan, but the consumer is no
+      longer pending - it must NOT be revived }
+    Host.Mount(TAnonymousPlugin.Create('provider2',
+      procedure(C: IContext)
+      begin
+        C.Services.Register(IGreetService, TGreetServiceImpl.Create);
+      end));
+    Assert.AreEqual(fsFailed, Host.PluginState('field-consumer'));
+    Host.Shutdown;
+  finally
+    Host.Free;
+  end;
+end;
+
+procedure THostActivationTests.Reload_Consumer_Revives_After_Factory_Fixed;
+var
+  Host: THost;
+begin
+  Host := THost.Create;
+  try
+    FlakyProviderPlugin.FailFirst := True;
+    Host.Mount(FlakyProviderPlugin.Create);
+    Host.Mount(FieldConsumerPlugin.Create);
+    Host.Start;
+    Assert.AreEqual(fsFailed, Host.PluginState('field-consumer'));
+    Host.Mount(TAnonymousPlugin.Create('provider2',
+      procedure(C: IContext)
+      begin
+        C.Services.Register(IGreetService, TGreetServiceImpl.Create);
+      end));
+    Host.Root.Reload('field-consumer');   { re-runs the wrapper -> revived }
+    Assert.AreEqual(fsActive, Host.PluginState('field-consumer'));
+    Host.Shutdown;
+  finally
+    Host.Free;
+  end;
+end;
+
 initialization
   TDUnitX.RegisterTestFixture(TInjectorTests);
   TDUnitX.RegisterTestFixture(TDeclarationMergeTests);
   TDUnitX.RegisterTestFixture(TContextHookTests);
   TDUnitX.RegisterTestFixture(TFactoryTests);
+  TDUnitX.RegisterTestFixture(TTransientTests);
+  TDUnitX.RegisterTestFixture(THostActivationTests);
 
 end.

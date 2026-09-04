@@ -135,10 +135,11 @@ end;
 function THost.DepsSatisfied(APlugin: IPlugin): Boolean;
 var
   LGUID: TGUID;
-  LDummy: IInterface;
 begin
+  { Has = pure existence check: dependency probing must NEVER trigger a lazy
+    factory build (spec 4.2/F1). For instance entries identical to before. }
   for LGUID in APlugin.Inject do
-    if not FRoot.Services.Resolve(LGUID, LDummy) then
+    if not FRoot.Services.Has(LGUID) then
       Exit(False);
   Result := True;
 end;
