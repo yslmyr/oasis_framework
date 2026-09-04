@@ -181,10 +181,10 @@ var
   Obj: MismatchConsumer;
 begin
   R := TServiceRegistry.Create(nil);
-  { IOtherService 的 GUID 下挂了一个不实现它的实例（手造失配）：
-    直接用 IGreetService 的 GUID 注册 TGreetServiceImpl——
-    MismatchConsumer 的字段是 IOtherService，Supports 必然失败 }
-  R.Register(IGreetService, TGreetServiceImpl.Create);
+  { 手造失配：实例挂在 IOtherService 的 GUID 下，Resolve 命中，
+    但 TGreetServiceImpl 不实现 IOtherService，Supports 必然失败
+    （spec 7.1-19：注册实例不实现字段接口的分支） }
+  R.Register(IOtherService, TGreetServiceImpl.Create);   { 错配：GUID 有了，实例不实现该接口 }
   Obj := MismatchConsumer.Create;
   try
     Assert.WillRaise(
