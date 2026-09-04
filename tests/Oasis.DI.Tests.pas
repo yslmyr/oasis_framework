@@ -840,7 +840,7 @@ begin
     Host.Mount(TAnonymousPlugin.Create('factory-provider',
       procedure(C: IContext)
       begin
-        C.Services.RegisterFactory(IGreetService,
+        C.Services.RegisterTransient(IGreetService,
           function: IInterface
           begin
             Inc(Builds);
@@ -849,7 +849,7 @@ begin
       end));
     Host.Mount(FieldConsumerPlugin.Create);   { dep probing must go through Has -> no build }
     Host.Start;
-    Assert.AreEqual(1, Builds);   { only the Populate resolve builds }
+    Assert.AreEqual(1, Builds);   { only the Populate resolve builds; a reverted (Resolve-based) DepsSatisfied would build a discarded probe instance -> count 2 -> this test fails (discriminating) }
     Host.Shutdown;
   finally
     Host.Free;
