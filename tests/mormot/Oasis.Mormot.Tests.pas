@@ -59,6 +59,7 @@ type
     [Test] procedure Repeated_Resolve_No_Refcount_Leak;
     [Test] procedure OwnsResolver_True_Frees_Container;
     [Test] procedure OwnsResolver_False_Keeps_Container;
+    [Test] procedure Reverse_Bridge_Resolves_Oasis_Service_Into_Mormot;
   end;
 
 implementation
@@ -229,6 +230,26 @@ begin
   Bridge.Free;
   List.Free;   { 调用方自己释放——若桥误释放，此处 double-free 炸 }
   Assert.Pass;
+end;
+
+procedure TMormotBridgeTests.Reverse_Bridge_Resolves_Oasis_Service_Into_Mormot;
+var
+  Ctx: IContext;
+  Inj: TInterfaceResolverInjected;
+  Calc: IMormotCalc;
+begin
+  Ctx := TContext.Create('t');
+  Ctx.Services.Register(IMormotCalc, TMormotCalcImpl.Create);
+  { mORMot DI 内核挂上 Oasis 解析源，再经 mORMot 自己的 Resolve 取回 }
+  Inj := TInterfaceResolverInjected.Create;
+  try
+    Inj.InjectResolver([TOasisResolver.Create(Ctx.Services)], {OwnOtherResolvers=}True);
+    Assert.IsTrue(Inj.Resolve(TypeInfo(IMormotCalc), Calc));
+    Assert.AreEqual(9, Calc.Add(4, 5));
+  finally
+    Inj.Free;
+  end;
+  Ctx.Dispose;
 end;
 
 initialization

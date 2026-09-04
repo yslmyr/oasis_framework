@@ -13,8 +13,11 @@
   Refcount rule (spec 5.2/N1): mORMot Resolve hands out ONE _AddRef which the
   caller owns. The forward closure RECEIVES it into an IInterface local and
   returns it VERBATIM (no intermediate pointer/interface conversions). The
-  reverse bridge assigns via IInterface(Obj) := ... The two styles are
-  deliberately different - never share a conversion helper between them. }
+  reverse bridge must CONVERT to the requested interface entry (the Oasis
+  registry hands out a bare IInterface): it passes the GUID through
+  QueryInterface, which grants the caller that same single _AddRef. The two
+  styles are deliberately different - never share a conversion helper
+  between them. }
 
 interface
 
@@ -41,6 +44,19 @@ type
       AOwnsResolver: Boolean = False);
     destructor Destroy; override;
     procedure Apply(const Ctx: IContext); override;
+  end;
+
+  { Reverse bridge: expose the Oasis registry as a mORMot TInterfaceResolver,
+    so mORMot-side DI graphs (TInjectableObject published properties,
+    TInterfaceResolverInjected.InjectResolver composition) can consume
+    Oasis fiber-registered services. }
+  TOasisResolver = class(TInterfaceResolver)
+  strict private
+    FRegistry: IServiceRegistry;
+  public
+    constructor Create(const ARegistry: IServiceRegistry);
+    function TryResolve(aInterface: PRttiInfo; out Obj): Boolean; override;
+    function Implements(aInterface: PRttiInfo): Boolean; override;
   end;
 
 implementation
@@ -104,6 +120,40 @@ begin
     mormot.core.rtti - Delphi uses are non-transitive). }
   for I := 0 to Length(FInterfaces) - 1 do
     RegisterOne(FInterfaces[I]^.InterfaceGuid^, FInterfaces[I]);
+end;
+
+{ TOasisResolver }
+
+constructor TOasisResolver.Create(const ARegistry: IServiceRegistry);
+begin
+  inherited Create;
+  FRegistry := ARegistry;
+end;
+
+function TOasisResolver.TryResolve(aInterface: PRttiInfo; out Obj): Boolean;
+var
+  LInst: IInterface;
+begin
+  { Reverse of the forward closure above: pull ONE instance out of the Oasis
+    registry (GUID via mormot's TRttiInfo extension, like Apply) and CONVERT
+    it to the REQUESTED interface entry before handing it out. The registry
+    stores a bare IInterface, but mORMot callers index the returned pointer
+    with the target interface's vtable - a raw IInterface(Obj) := copy hands
+    them the wrong entry (AV on first method call). mORMot's own
+    TInterfaceResolverList only copies raw because Add() pre-converts its
+    instances via GetInterfaceFromEntry; its fDependencies path converts via
+    GetInterface(guid, Obj) - QueryInterface passthrough is the IInterface-
+    side equivalent, and it grants the caller the single _AddRef (S_OK = 0,
+    spec 5.2/N1); LInst's own take is released at scope exit. }
+  Result := FRegistry.Resolve(aInterface^.InterfaceGuid^, LInst);
+  if Result then
+    Result := LInst.QueryInterface(aInterface^.InterfaceGuid^, Obj) = 0;
+end;
+
+function TOasisResolver.Implements(aInterface: PRttiInfo): Boolean;
+begin
+  { Has never triggers a factory build - cheap probe, mirrors registry semantics. }
+  Result := FRegistry.Has(aInterface^.InterfaceGuid^);
 end;
 
 end.
