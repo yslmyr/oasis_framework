@@ -72,6 +72,19 @@ type
     [Inject] FWantOther: IOtherService;
   end;
 
+  { Task 2: declaration-merge fixtures (manual AddInject ∪ [Inject] fields). }
+  MergePlugin = class(TOasisPlugin)
+  strict private
+    [Inject] FGreet: IGreetService;
+  public
+    constructor Create;
+  end;
+
+  ManualOnlyPlugin = class(TOasisPlugin)
+  public
+    constructor Create;
+  end;
+
   [TestFixture]
   TInjectorTests = class
   public
@@ -83,6 +96,13 @@ type
     [Test] procedure Populate_Instance_Not_Supporting_Interface_Raises;
     [Test] procedure Need_Returns_Typed_Instance;
     [Test] procedure Need_Missing_Raises_And_TryNeed_False;
+  end;
+
+  [TestFixture]
+  TDeclarationMergeTests = class
+  public
+    [Test] procedure Inject_Merges_Manual_And_Field_Guids;
+    [Test] procedure Inject_Result_Is_Cached_And_Stable;
   end;
 
 implementation
@@ -218,7 +238,61 @@ begin
     EOasisServiceNotFound);
 end;
 
+{ MergePlugin / ManualOnlyPlugin }
+
+constructor MergePlugin.Create;
+begin
+  inherited Create('merge');
+  AddInject(IOtherService);   { 手动一个 + 字段一个 }
+end;
+
+constructor ManualOnlyPlugin.Create;
+begin
+  inherited Create('manual');
+  AddInject(IGreetService);
+end;
+
+{ TDeclarationMergeTests }
+
+procedure TDeclarationMergeTests.Inject_Merges_Manual_And_Field_Guids;
+var
+  P: MergePlugin;
+  Guids: TArray<TGUID>;
+  I: Integer;
+  LOther, LGreet: Boolean;
+begin
+  P := MergePlugin.Create;
+  try
+    Guids := P.Inject;
+    Assert.AreEqual(2, Length(Guids));
+    LOther := False;
+    LGreet := False;
+    for I := 0 to High(Guids) do
+    begin
+      if IsEqualGUID(Guids[I], IOtherService) then LOther := True;
+      if IsEqualGUID(Guids[I], IGreetService) then LGreet := True;
+    end;
+    Assert.IsTrue(LOther and LGreet);
+  finally
+    P.Free;
+  end;
+end;
+
+procedure TDeclarationMergeTests.Inject_Result_Is_Cached_And_Stable;
+var
+  P: ManualOnlyPlugin;
+begin
+  P := ManualOnlyPlugin.Create;
+  try
+    { 两次调用返回同一缓存数组引用（动态数组指针比较） }
+    Assert.IsTrue(Pointer(P.Inject) = Pointer(P.Inject));
+  finally
+    P.Free;
+  end;
+end;
+
 initialization
   TDUnitX.RegisterTestFixture(TInjectorTests);
+  TDUnitX.RegisterTestFixture(TDeclarationMergeTests);
 
 end.
