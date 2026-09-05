@@ -13,7 +13,16 @@
   must descend from TPersistent) that implements IOasisPluginFactory. The host
   casts the located object to IOasisPluginFactory by GUID (interface identity is
   by GUID, so the host and BPL may each statically contain their own copy of
-  this unit). }
+  this unit).
+
+  MULTI-BPL PROTOCOL: the rtl class list rejects duplicate registrations
+  ('Duplicates not allowed'), so TWO BPLs can never both register the
+  conventional alias - that form serves one plugin BPL per process. A host that
+  loads several plugin BPLs mounts them with an explicit factory class name:
+  Host.Mount('bpl:<path>;factory=<TFactoryClassName>'). Such a module registers
+  its factory under its UNIQUE class name (plain RegisterClass) and removes it
+  in its finalization (UnregisterClass), so the BPL can be unloaded and loaded
+  again in the same process. }
 
 interface
 

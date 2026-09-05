@@ -1,0 +1,20 @@
+﻿package SuiteCore;
+
+{$ALIGN 8}
+{$RUNONLY}
+
+(* Service-only BPL module of the suite demo. Mounted with
+  Host.Mount('bpl:SuiteCore.bpl;factory=TSuiteCoreFactory'). Requires the VCL
+  runtime only because the shared SuiteContract uses Vcl.Controls. *)
+
+requires
+  rtl,
+  vcl,
+  Oasis.Bpl,
+  SuiteContracts,
+  Oasis.Core;
+
+contains
+  SuiteCoreMain;
+
+end.

@@ -124,6 +124,16 @@ demos/VclShowroom/  **Cordis 架构优势展示间** - six clickable scenario ca
                    →IUIInvoker marshaling; dispatch playground with call
                    counters for emit/bail/waterfall. Statically linked (no BPLs).
                    `Showroom.exe /selftest` = 32-check headless report
+demos/BplSuiteDemo/ **Tangram-style BPL suite** - host EXE + three feature BPL
+                   modules (SuiteCore services / SuiteDashboard / SuiteOrders)
+                   coupled ONLY through the shared SuiteContract interfaces:
+                   sub-UIs dock as host tabs via IShellHost, cross-BPL deps via
+                   [Inject] fields, a transient service with per-resolve
+                   instances, settings-change events, cascade unload of the
+                   service module and in-process remount. Multi-BPL factory
+                   protocol: unique factory class names + Mount('bpl:...;
+                   factory=T...Factory'). `SuiteHost.exe /selftest` = 11-check
+                   headless report
 samples/VclBplPlugin/ VCL BPL plugin adding a tab to the running host app
 docs/superpowers/  design spec + implementation plan
 ```
@@ -133,8 +143,8 @@ docs/superpowers/  design spec + implementation plan
 **One click** (builds runtime packages + runs both test suites + builds all demos):
 
 ```bash
-build.cmd        # expect: ALL GREEN (79/79 + 6/6 + 32/32; mormot runner 9/9
-                 #  + bridge demo when mormot2 present, else SKIP)
+build.cmd        # expect: ALL GREEN (79/79 + 6/6 + 32/32; BPL suite 11/11;
+                 #  mormot runner 9/9 + bridge demo when mormot2 present, else SKIP)
 ```
 
 The Delphi 13 toolchain is used directly (`dcc32`). From the respective folder:

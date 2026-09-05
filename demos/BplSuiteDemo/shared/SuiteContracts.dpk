@@ -1,0 +1,19 @@
+﻿package SuiteContracts;
+
+{$ALIGN 8}
+{$RUNONLY}
+
+(* The shared interface contract of the BPL Suite demo as its own runtime
+  package. The RTL refuses to load two BPLs that contain the same unit, so
+  every module REQUIRES this package instead of embedding SuiteContract.pas;
+  the host EXE keeps its static source copy (an EXE-static copy plus one
+  package containing the unit is legal - the VclBplPlugin pattern). *)
+
+requires
+  rtl,
+  vcl;
+
+contains
+  SuiteContract;
+
+end.
