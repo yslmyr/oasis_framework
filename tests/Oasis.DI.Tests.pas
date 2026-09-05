@@ -178,6 +178,7 @@ type
     [Test] procedure Parent_Child_Shadowing_With_Factory;
     [Test] procedure Owner_Scope_Dispose_Releases_Factory_And_Memo;
     [Test] procedure Parent_Factory_Resolves_Through_Child;
+    [Test] procedure Nil_Returning_Factory_Raises_FactoryError;
   end;
 
   [TestFixture]
@@ -657,6 +658,26 @@ begin
   Assert.IsTrue(RParent.Has(IGreetService));
   { 子层实例遮蔽父层工厂；父层仍走工厂 }
   Assert.IsFalse(RChild.Get(IGreetService) = RParent.Get(IGreetService));
+end;
+
+procedure TFactoryTests.Nil_Returning_Factory_Raises_FactoryError;
+var
+  R: TServiceRegistry;      { 类引用：任何闭包都不以接口形态捕获注册表（共享
+                               $ActRec 会经存储的工厂闭包成环 - Task 4/5 同款陷阱） }
+  Reg: IServiceRegistry;    { 拥有权锚：作用域结束释放注册表 }
+begin
+  { 迭代一对抗审查 P2-1：工厂返回 nil 不得 memoize 无进展 / 返回 True+nil，
+    必须报 EOasisServiceFactoryError }
+  R := TServiceRegistry.Create(nil);
+  Reg := R;
+  R.RegisterFactory(IGreetService,
+    function: IInterface
+    begin
+      Result := nil;
+    end);
+  Assert.WillRaise(
+    procedure var X: IInterface; begin X := R.Get(IGreetService); end,
+    EOasisServiceFactoryError);
 end;
 
 procedure TFactoryTests.Parent_Factory_Resolves_Through_Child;

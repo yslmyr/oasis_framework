@@ -27,10 +27,11 @@ uses
   mormot.core.base, mormot.core.rtti, mormot.core.interfaces;
 
 type
-  { Mirrors a mORMot resolver's interfaces into the Oasis registry as LAZY
-    factories (resolve pierces through to mORMot; sic* lifetimes stay owned
-    by the mORMot container - a shared instance stays shared, a transient
-    class registration yields a fresh instance per resolve). Unmounting the
+  { Mirrors a mORMot resolver's interfaces into the Oasis registry as
+    per-resolve factories (every resolve pierces through to mORMot; sic*
+    lifetimes stay owned by the mORMot container - a shared instance stays
+    shared, a transient class registration yields a fresh instance per
+    resolve; a lazy-singleton memo would wrongly freeze that). Unmounting the
     bridge cascades to Oasis consumers. AInterfaces are TypeInfo(Ixxx)
     values - compile-time checked. }
   TMormotServicesPlugin = class(TOasisPlugin)

@@ -285,6 +285,11 @@ begin
   end;
   { factory entries: build WITHOUT holding the lock; thread-local circular guard }
   LBuilt := BuildGuarded(AGUID, LEntry.Factory);
+  { a factory returning nil would memoize "no progress" (rebuilding on every
+    resolve) and hand callers a True/nil pair - treat it as the error it is }
+  if LBuilt = nil then
+    raise EOasisServiceFactoryError.CreateFmt(
+      'Service factory returned nil for %s', [GUIDToString(AGUID)]);
   if LEntry.Kind = skLazySingleton then
   begin
     FLock.EnterWrite;
