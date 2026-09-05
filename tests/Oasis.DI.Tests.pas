@@ -57,6 +57,9 @@ type
     function HasDerived: Boolean;
   end;
 
+  { RTTI-only fixture fields: the injector writes them via TRttiField.Offset,
+    the compiler never sees a use - silence H2219 for this block. }
+  {$HINTS OFF}
   BadNonInterfaceField = class(TObject)
   strict private
     [Inject] FNotAnInterface: Integer;
@@ -78,11 +81,34 @@ type
     [Inject] FGreet: IGreetService;
   public
     constructor Create;
+    procedure Apply(const Ctx: IContext); override;   { probe-only, never mounted }
   end;
 
   ManualOnlyPlugin = class(TOasisPlugin)
   public
     constructor Create;
+    procedure Apply(const Ctx: IContext); override;   { probe-only, never mounted }
+  end;
+
+  { manual and field declare the SAME GUID: the union must dedupe to one }
+  DupPlugin = class(TOasisPlugin)
+  strict private
+    [Inject] FGreet: IGreetService;
+  public
+    constructor Create;
+    procedure Apply(const Ctx: IContext); override;   { probe-only, never mounted }
+  end;
+  {$HINTS ON}
+
+  { same-fiber cleanup-order probe: registers a user cleanup in its OWN Apply
+    and records whether the [Inject] field is still populated at teardown }
+  OrderProbePlugin = class(TOasisPlugin)
+  strict private
+    [Inject] FGreet: IGreetService;
+  public
+    SawFieldAtTeardown: Boolean;
+    constructor Create;
+    procedure Apply(const Ctx: IContext); override;
   end;
 
   { Task 3: context-hook fixtures (populate-before-Apply, clear-on-teardown). }
@@ -145,6 +171,7 @@ type
     [Test] procedure Apply_Failure_Clears_Fields_FsFailed;
     [Test] procedure Reload_Refills_Fields;
     [Test] procedure User_Cleanup_Still_Sees_Field;
+    [Test] procedure Same_Fiber_User_Cleanup_Runs_Before_Injector_Clear;
     [Test] procedure Closure_Plugin_Unaffected;
   end;
 
@@ -166,6 +193,7 @@ type
   public
     [Test] procedure Inject_Merges_Manual_And_Field_Guids;
     [Test] procedure Inject_Result_Is_Cached_And_Stable;
+    [Test] procedure Inject_Dedupes_Manual_And_Field_Same_Guid;
   end;
 
   [TestFixture]
@@ -340,10 +368,44 @@ begin
   AddInject(IOtherService);   { 手动一个 + 字段一个 }
 end;
 
+procedure MergePlugin.Apply(const Ctx: IContext);
+begin
+end;
+
 constructor ManualOnlyPlugin.Create;
 begin
   inherited Create('manual');
   AddInject(IGreetService);
+end;
+
+procedure ManualOnlyPlugin.Apply(const Ctx: IContext);
+begin
+end;
+
+constructor DupPlugin.Create;
+begin
+  inherited Create('dup');
+  AddInject(IGreetService);   { same GUID as the [Inject] field }
+end;
+
+procedure DupPlugin.Apply(const Ctx: IContext);
+begin
+end;
+
+constructor OrderProbePlugin.Create;
+begin
+  inherited Create('order-probe');
+end;
+
+procedure OrderProbePlugin.Apply(const Ctx: IContext);
+begin
+  { user cleanup on the same fiber as the injector Clear: the wrapper pushed
+    Clear BEFORE Apply ran, so LIFO unwinds this first - field still filled }
+  Ctx.Effect(
+    function: TDisposer
+    begin
+      Result := procedure begin SawFieldAtTeardown := FGreet <> nil; end;
+    end);
 end;
 
 { TDeclarationMergeTests }
@@ -380,6 +442,23 @@ begin
   try
     { 两次调用返回同一缓存数组引用（动态数组指针比较） }
     Assert.IsTrue(Pointer(P.Inject) = Pointer(P.Inject));
+  finally
+    P.Free;
+  end;
+end;
+
+procedure TDeclarationMergeTests.Inject_Dedupes_Manual_And_Field_Same_Guid;
+var
+  P: DupPlugin;
+  Guids: TArray<TGUID>;
+begin
+  P := DupPlugin.Create;
+  try
+    Guids := P.Inject;
+    Assert.AreEqual(1, Length(Guids));
+    Assert.IsTrue(IsEqualGUID(Guids[0], IGreetService));
+    { 缓存语义不变：二次调用同一数组引用 }
+    Assert.IsTrue(Pointer(Guids) = Pointer(P.Inject));
   finally
     P.Free;
   end;
@@ -535,6 +614,24 @@ begin
       end));
   Ctx.Dispose;   { 用户 cleanup 先于 Clear 执行（顺序契约） }
   Assert.IsTrue(SawFieldInCleanup);
+end;
+
+procedure TContextHookTests.Same_Fiber_User_Cleanup_Runs_Before_Injector_Clear;
+var
+  Ctx: IContext;
+  P: OrderProbePlugin;
+  PI: IInterface;   { 锚：Dispose 释放 fiber 引用后仍需读 P 的结果 }
+begin
+  Ctx := TContext.Create('t');
+  P := OrderProbePlugin.Create;
+  PI := P;
+  Ctx.Services.Register(IGreetService, TGreetServiceImpl.Create);
+  Ctx.Plugin(P);
+  Assert.IsFalse(P.SawFieldAtTeardown);   { teardown 还没跑 }
+  Ctx.Dispose;
+  { 顺序契约：同 fiber 上用户 cleanup 先于 injector Clear 执行，
+    所以销毁瞬间字段仍已填充 }
+  Assert.IsTrue(P.SawFieldAtTeardown);
 end;
 
 procedure TContextHookTests.Closure_Plugin_Unaffected;
@@ -801,7 +898,9 @@ var
   Host: THost;
   P: TransientConsumerPlugin;
   G1, G2: string;
+  Builds: Integer;
 begin
+  Builds := 0;
   Host := THost.Create;
   try
     P := TransientConsumerPlugin.Create;
@@ -811,13 +910,17 @@ begin
         C.Services.RegisterTransient(IGreetService,
           function: IInterface
           begin
+            Inc(Builds);
             Result := TGreetServiceImpl.Create;
           end);
       end));
     Host.Mount(P);
     Host.Start;
+    Assert.AreEqual(1, Builds);   { 一次 Populate 恰好一次构建 }
     G1 := P.GreetFromField;
+    Assert.AreEqual(1, Builds);   { 读字段不触发重新构建 }
     Host.Root.Reload('transient-consumer');
+    Assert.AreEqual(2, Builds);   { reload = 重新 Populate = 恰好多一次 }
     G2 := P.GreetFromField;   { reload gets a fresh instance, stable within one Apply }
     Assert.AreEqual('Hello, t', G1);
     Assert.AreEqual('Hello, t', G2);
