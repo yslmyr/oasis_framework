@@ -76,7 +76,7 @@ Oasis brings Cordis's core design ideas to Delphi:
 | Roadmap 3 | `Oasis.UI` — `IUIInvoker` (`Queue`/`Sync`) main-thread marshaling bridge (RTL-only, VCL/FMX-agnostic) | **Done** — tests |
 | Roadmap 4b | Config env layers (base + override) + typed readers (`Int`/`Bool`/`Float`) | **Done** — tests |
 | Parity | `bail` dispatch (first truthy wins); strongly-typed `On<TPayload>`; `Fiber.State` machine (`PluginState`) | **Done** — 44/44 tests |
-| IoC/DI | `[Inject]` field injection; factory lifetimes; mORMot2 bridge (`Oasis.Mormot`, optional) | **Done** — 75/75 tests (+8/8 mormot runner when mormot2 present) |
+| IoC/DI | `[Inject]` field injection; factory lifetimes; mORMot2 bridge (`Oasis.Mormot`, optional) | **Done** — 79/79 tests (+9/9 mormot runner when mormot2 present) |
 | Future | — | — |
 
 ## Requirements
@@ -133,7 +133,7 @@ docs/superpowers/  design spec + implementation plan
 **One click** (builds runtime packages + runs both test suites + builds all demos):
 
 ```bash
-build.cmd        # expect: ALL GREEN (75/75 + 6/6 + 32/32; mormot runner 8/8
+build.cmd        # expect: ALL GREEN (79/79 + 6/6 + 32/32; mormot runner 9/9
                  #  + bridge demo when mormot2 present, else SKIP)
 ```
 
