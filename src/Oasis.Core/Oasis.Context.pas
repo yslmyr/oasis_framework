@@ -136,6 +136,9 @@ type
 
 implementation
 
+uses
+  Oasis.Inject;
+
 var
   GEventBusFactory: TEventBusFactory;
 
@@ -299,8 +302,11 @@ end;
 procedure TContext.Plugin(APlugin: IPlugin);
 var
   LPlugin: IPlugin;
+  LObj: TObject;
 begin
   LPlugin := APlugin;
+  { Plain-class plugins only (aggregated implementations raise here, spec 9). }
+  LObj := LPlugin as TObject;
   MountUnderFreshFiber(APlugin.PluginName,
     procedure(C: IContext)
     begin
@@ -308,6 +314,11 @@ begin
         capture the plugin object via Self. Registered first so it is released
         last (after the plugin's own cleanups run). }
       C.Effects.AddDisposable(LPlugin);
+      { Field-clear BEFORE any user cleanup registration => runs AFTER them
+        (LIFO): user cleanups still see injected fields, the fields are nil'd
+        before the plugin object is released. Order contract: spec 3.3 / A.9. }
+      C.Effects.AddCleanup(procedure begin TOasisInjector.Clear(LObj); end);
+      TOasisInjector.Populate(LObj, C.Services);
       LPlugin.Apply(C);
     end, nil);
 end;

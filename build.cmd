@@ -83,6 +83,21 @@ if errorlevel 1 goto :fail
 type vclshowroom_selftest.txt
 popd
 
+set "MORMOT=D:\code\awesome-pascal\mormot2"
+
+echo [+] Building + running mORMot bridge tests + demo (SKIP when mormot2 absent)...
+if not exist "%MORMOT%\src\core\mormot.core.interfaces.pas" (
+  echo SKIP: mormot2 not found at %MORMOT% - bridge not built
+  goto :mormot_done
+)
+pushd "%ROOT%tests\mormot" && "%DCC%" -B %NS% -U"%DUX%" -U"%CORE%" -U"%HOSTING%" -U"%MORMOT%\src\core" -U"%MORMOT%\src\soa" -U"%MORMOT%\static" Oasis.Mormot.Tests.dpr || goto :fail
+Oasis.Mormot.Tests.exe
+if errorlevel 1 goto :fail
+popd
+pushd "%ROOT%demos\MormotBridgeDemo" && "%DCC%" -B %NS% -U"%MORMOT%\src\core" -U"%MORMOT%\src\soa" -U"%MORMOT%\static" MormotBridgeDemo.dpr || goto :fail
+popd
+:mormot_done
+
 echo.
 echo ALL GREEN - packages in bin\, tests passed, demos built.
 exit /b 0

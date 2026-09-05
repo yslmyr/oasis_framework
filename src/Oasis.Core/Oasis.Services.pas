@@ -24,8 +24,15 @@ type
   TServiceRemovedEvent = reference to procedure(const AGUID: TGUID);
 
   IServiceRegistry = interface
-    ['{B2C3D4E5-F6A7-4B8C-9D0E-1F2A3B4C5D6E}']
+    ['{B2C3D4E5-F6A7-4B8C-9D0E-1F2A3B4C5D6F}']
     procedure Register(const AGUID: TGUID; AInstance: IInterface);
+    { Register a lazy singleton factory: first Get/Resolve builds and memoizes;
+      Has never triggers a build. Factory closures must NOT capture the
+      registry as IServiceRegistry (refcount cycle) - capture class refs. }
+    procedure RegisterFactory(const AGUID: TGUID; AFactory: TFunc<IInterface>);
+    { Register a transient factory: every Get/Resolve builds a fresh instance;
+      instance lifetime = the consumer's interface refcount. }
+    procedure RegisterTransient(const AGUID: TGUID; AFactory: TFunc<IInterface>);
     { Remove the local registration for AGUID. Returns True if it existed (and
       fires OnServiceRemoved). }
     function  Unregister(const AGUID: TGUID): Boolean;
@@ -40,19 +47,35 @@ type
     procedure SetOwnerScope(AScope: IEffectScope);
   end;
 
+  TServiceKind = (skInstance, skLazySingleton, skTransient);
+
+  TServiceEntry = record
+    Kind: TServiceKind;
+    Token: UInt64;              { identity for fiber-cleanup "remove if still mine" }
+    Instance: IInterface;       { skInstance value / skLazySingleton memo }
+    Factory: TFunc<IInterface>; { skLazySingleton / skTransient }
+    class function Make(AKind: TServiceKind; AToken: UInt64;
+      const AInstance: IInterface; AFactory: TFunc<IInterface>): TServiceEntry; static;
+  end;
+
   TServiceRegistry = class(TInterfacedObject, IServiceRegistry)
   strict private
     FLock: TOasisRWSpinLock;
-    FMap: TDictionary<TGUID, IInterface>;
+    FMap: TDictionary<TGUID, TServiceEntry>;
     FParent: IServiceRegistry;
     FOnServiceAdded: TServiceAddedEvent;
     FOnServiceRemoved: TServiceRemovedEvent;
     FOwner: IEffectScope;
-    procedure RemoveIfSame(const AGUID: TGUID; AInstance: IInterface);
+    FNextToken: UInt64;
+    procedure RegisterEntry(AKind: TServiceKind; const AGUID: TGUID;
+      const AInstance: IInterface; AFactory: TFunc<IInterface>);
+    procedure RemoveEntryIfToken(const AGUID: TGUID; AToken: UInt64);
   public
     constructor Create(AParent: IServiceRegistry);
     destructor Destroy; override;
     procedure Register(const AGUID: TGUID; AInstance: IInterface);
+    procedure RegisterFactory(const AGUID: TGUID; AFactory: TFunc<IInterface>);
+    procedure RegisterTransient(const AGUID: TGUID; AFactory: TFunc<IInterface>);
     function  Unregister(const AGUID: TGUID): Boolean;
     function  Get(const AGUID: TGUID): IInterface;
     function  Resolve(const AGUID: TGUID; out AInstance: IInterface): Boolean;
@@ -64,13 +87,58 @@ type
 
 implementation
 
+const
+  CMaxBuildDepth = 16;
+
+type
+  { Per-thread build guard: leak-free (record threadvar, no heap). A lazy
+    factory resolving its own GUID re-enters and hits the circular check. }
+  TBuildStack = record
+    Depth: Integer;
+    Guids: array[0..CMaxBuildDepth - 1] of TGUID;
+  end;
+
+threadvar
+  FBuildStack: TBuildStack;
+
+function BuildGuarded(const AGUID: TGUID; AFactory: TFunc<IInterface>): IInterface;
+var
+  I: Integer;
+begin
+  for I := 0 to FBuildStack.Depth - 1 do
+    if IsEqualGUID(FBuildStack.Guids[I], AGUID) then
+      raise EOasisServiceFactoryError.CreateFmt(
+        'Circular lazy factory build: %s', [GUIDToString(AGUID)]);
+  if FBuildStack.Depth >= CMaxBuildDepth then
+    raise EOasisServiceFactoryError.Create('Lazy factory build recursion too deep');
+  FBuildStack.Guids[FBuildStack.Depth] := AGUID;
+  Inc(FBuildStack.Depth);
+  try
+    Result := AFactory();   { NEVER called under the registry lock }
+  finally
+    Dec(FBuildStack.Depth);
+  end;
+end;
+
+{ TServiceEntry }
+
+class function TServiceEntry.Make(AKind: TServiceKind; AToken: UInt64;
+  const AInstance: IInterface; AFactory: TFunc<IInterface>): TServiceEntry;
+begin
+  Result.Kind := AKind;
+  Result.Token := AToken;
+  Result.Instance := AInstance;
+  Result.Factory := AFactory;
+end;
+
 { TServiceRegistry }
 
 constructor TServiceRegistry.Create(AParent: IServiceRegistry);
 begin
   inherited Create;
-  FMap := TDictionary<TGUID, IInterface>.Create;
+  FMap := TDictionary<TGUID, TServiceEntry>.Create;
   FParent := AParent;
+  FNextToken := 0;
 end;
 
 destructor TServiceRegistry.Destroy;
@@ -81,16 +149,20 @@ begin
   inherited Destroy;
 end;
 
-procedure TServiceRegistry.Register(const AGUID: TGUID; AInstance: IInterface);
+procedure TServiceRegistry.RegisterEntry(AKind: TServiceKind;
+  const AGUID: TGUID; const AInstance: IInterface;
+  AFactory: TFunc<IInterface>);
 var
   LAdded: TServiceAddedEvent;
   LOwner: IEffectScope;
   LReg: TServiceRegistry;
-  LInst: IInterface;
+  LEntry: TServiceEntry;
 begin
   FLock.EnterWrite;
   try
-    FMap.AddOrSetValue(AGUID, AInstance);
+    Inc(FNextToken);
+    LEntry := TServiceEntry.Make(AKind, FNextToken, AInstance, AFactory);
+    FMap.AddOrSetValue(AGUID, LEntry);
     LAdded := FOnServiceAdded;
     LOwner := FOwner;
   finally
@@ -98,19 +170,36 @@ begin
   end;
   if LOwner <> nil then
   begin
-    { Auto-unregister when the owning scope (plugin fiber) disposes. Captures the
-      exact instance so a newer overwrite is not removed by an older cleanup. }
+    { capture the CLASS ref (never IServiceRegistry - refcount cycle) and the
+      entry's token so a newer overwrite is not removed by an older cleanup }
     LReg := Self;
-    LInst := AInstance;
     LOwner.AddCleanup(
       procedure
       begin
-        LReg.RemoveIfSame(AGUID, LInst);
-        LInst := nil;   { release the captured service reference }
+        LReg.RemoveEntryIfToken(AGUID, LEntry.Token);
+        LEntry.Instance := nil;   { release captured memo/instance }
+        LEntry.Factory := nil;    { release captured factory closure }
       end);
   end;
   if Assigned(LAdded) then
     LAdded(AGUID);
+end;
+
+procedure TServiceRegistry.Register(const AGUID: TGUID; AInstance: IInterface);
+begin
+  RegisterEntry(skInstance, AGUID, AInstance, nil);
+end;
+
+procedure TServiceRegistry.RegisterFactory(const AGUID: TGUID;
+  AFactory: TFunc<IInterface>);
+begin
+  RegisterEntry(skLazySingleton, AGUID, nil, AFactory);
+end;
+
+procedure TServiceRegistry.RegisterTransient(const AGUID: TGUID;
+  AFactory: TFunc<IInterface>);
+begin
+  RegisterEntry(skTransient, AGUID, nil, AFactory);
 end;
 
 function TServiceRegistry.Unregister(const AGUID: TGUID): Boolean;
@@ -132,14 +221,14 @@ begin
     LRemoved(AGUID);
 end;
 
-procedure TServiceRegistry.RemoveIfSame(const AGUID: TGUID; AInstance: IInterface);
+procedure TServiceRegistry.RemoveEntryIfToken(const AGUID: TGUID; AToken: UInt64);
 var
   LRemoved: TServiceRemovedEvent;
-  LCurrent: IInterface;
+  LEntry: TServiceEntry;
 begin
   FLock.EnterWrite;
   try
-    if FMap.TryGetValue(AGUID, LCurrent) and (LCurrent = AInstance) then
+    if FMap.TryGetValue(AGUID, LEntry) and (LEntry.Token = AToken) then
     begin
       FMap.Remove(AGUID);
       LRemoved := FOnServiceRemoved;
@@ -160,23 +249,82 @@ begin
 end;
 
 function TServiceRegistry.Resolve(const AGUID: TGUID; out AInstance: IInterface): Boolean;
+var
+  LEntry, LNow: TServiceEntry;
+  LBuilt: IInterface;
+  LFound: Boolean;
 begin
+  LFound := False;
   { hot path: shared read lock - concurrent lookups do not block each other }
   FLock.EnterRead;
   try
-    Result := FMap.TryGetValue(AGUID, AInstance);
+    if FMap.TryGetValue(AGUID, LEntry) then
+    begin
+      LFound := True;
+      if LEntry.Kind = skInstance then
+      begin
+        AInstance := LEntry.Instance;
+        Exit(True);
+      end;
+      if (LEntry.Kind = skLazySingleton) and (LEntry.Instance <> nil) then
+      begin
+        AInstance := LEntry.Instance;   { memoized already }
+        Exit(True);
+      end;
+    end;
   finally
     FLock.LeaveRead;
   end;
-  if (not Result) and (FParent <> nil) then
-    Result := FParent.Resolve(AGUID, AInstance);
+  if not LFound then
+  begin
+    if FParent = nil then
+      Exit(False);
+    { parent delegation with NO local lock held: a parent-side factory must
+      never build under the child's read lock (plan global constraint) }
+    Exit(FParent.Resolve(AGUID, AInstance));
+  end;
+  { factory entries: build WITHOUT holding the lock; thread-local circular guard }
+  LBuilt := BuildGuarded(AGUID, LEntry.Factory);
+  { a factory returning nil would memoize "no progress" (rebuilding on every
+    resolve) and hand callers a True/nil pair - treat it as the error it is }
+  if LBuilt = nil then
+    raise EOasisServiceFactoryError.CreateFmt(
+      'Service factory returned nil for %s', [GUIDToString(AGUID)]);
+  if LEntry.Kind = skLazySingleton then
+  begin
+    FLock.EnterWrite;
+    try
+      { last-write-wins under concurrent first resolve (spec 4.3/F6). Memoize
+        only if OUR registration is still current (token match against the
+        FIRST read's token) - a newer overwrite must not be clobbered by an
+        older factory's late build. A losing build is released when LBuilt
+        goes out of scope. }
+      if FMap.TryGetValue(AGUID, LNow) and (LNow.Token = LEntry.Token) then
+        FMap.AddOrSetValue(AGUID,
+          TServiceEntry.Make(LEntry.Kind, LEntry.Token, LBuilt, LEntry.Factory));
+    finally
+      FLock.LeaveWrite;
+    end;
+  end;
+  AInstance := LBuilt;
+  Result := True;
 end;
 
 function TServiceRegistry.Has(const AGUID: TGUID): Boolean;
 var
-  LDummy: IInterface;
+  LEntry: TServiceEntry;
 begin
-  Result := Resolve(AGUID, LDummy);
+  { EXISTENCE check only - a factory must NEVER be triggered by Has/DepsSatisfied
+    (spec 4.2/F1). For skInstance this is behaviorally identical to the old
+    Resolve-based implementation. }
+  FLock.EnterRead;
+  try
+    Result := FMap.TryGetValue(AGUID, LEntry);
+  finally
+    FLock.LeaveRead;
+  end;
+  if (not Result) and (FParent <> nil) then
+    Result := FParent.Has(AGUID);
 end;
 
 procedure TServiceRegistry.SetOnServiceAdded(AHandler: TServiceAddedEvent);

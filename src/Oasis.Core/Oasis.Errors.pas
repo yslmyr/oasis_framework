@@ -51,6 +51,12 @@ type
 
   EOasisLoaderError = class(EOasisError);
 
+  { DI: [Inject] field scan/populate failures (declaration or runtime). }
+  EOasisInjectError = class(EOasisError);
+
+  { DI: service factory raised / circular lazy build / bridge resolve failure. }
+  EOasisServiceFactoryError = class(EOasisError);
+
 implementation
 
 { EOasisDependencyCycle }

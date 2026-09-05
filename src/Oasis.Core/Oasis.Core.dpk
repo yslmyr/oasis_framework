@@ -14,6 +14,7 @@ contains
   Oasis.TypedEvents,
   Oasis.Effects,
   Oasis.Services,
+  Oasis.Inject,
   Oasis.Events,
   Oasis.Context,
   Oasis.Plugin;

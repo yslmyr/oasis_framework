@@ -37,6 +37,19 @@ Oasis brings Cordis's core design ideas to Delphi:
   unloading a provider unregisters its services, the Host deactivates the
   affected consumers (re-queued), and they re-activate when the dependency
   returns.
+- **IoC/DI** — `[Inject]` attribute field injection (declare the field, the
+  host fills it before `Apply` and nils it on deactivate/reload — declaration
+  merges with `AddInject`); factory lifetimes `RegisterFactory` (lazy
+  singleton: dependency probes never trigger builds) / `RegisterTransient`;
+  typed pull helper `TOasisDI.Need<T>`. A transient service injected into a
+  field gives the plugin ONE fresh instance per activation (Apply), held
+  until its fiber tears down — not a new instance per access. Optional
+  **mORMot2 bridge** unit `Oasis.Mormot` (MIT/MPL boundary: uses-only, zero
+  copied code): `TMormotServicesPlugin` mirrors a mORMot container into
+  Oasis as per-resolve factories (the container keeps owning sic* lifetimes;
+  unload cascades), `TOasisResolver` exposes the Oasis registry
+  to mORMot-side DI. Constraint (spec §3.4/N4): a field-injected plugin
+  instance must be mounted at most once.
 - **Config** — `TJsonConfigPlugin` registers an `IOasisConfig` service
   (`disabled` flag + per-plugin values); `Host.TryMount` skips disabled plugins
   (cordis.yml semantics, JSON edition). Optional **env layers** merge overrides
@@ -63,6 +76,7 @@ Oasis brings Cordis's core design ideas to Delphi:
 | Roadmap 3 | `Oasis.UI` — `IUIInvoker` (`Queue`/`Sync`) main-thread marshaling bridge (RTL-only, VCL/FMX-agnostic) | **Done** — tests |
 | Roadmap 4b | Config env layers (base + override) + typed readers (`Int`/`Bool`/`Float`) | **Done** — tests |
 | Parity | `bail` dispatch (first truthy wins); strongly-typed `On<TPayload>`; `Fiber.State` machine (`PluginState`) | **Done** — 44/44 tests |
+| IoC/DI | `[Inject]` field injection; factory lifetimes; mORMot2 bridge (`Oasis.Mormot`, optional) | **Done** — 75/75 tests (+8/8 mormot runner when mormot2 present) |
 | Future | — | — |
 
 ## Requirements
@@ -95,6 +109,7 @@ demos/BplDemo/     dynamic BPL-loading demo (needs rtl.bpl on PATH; writes bplde
 demos/CascadeDemo/ dependency cascade + per-plugin Reload/Unload (4 phases)
 demos/ConfigDemo/  config-driven assembly: disabled skip, env layers, typed values
                    (run with no args = base layer; `ConfigDemo production` = env layer)
+demos/MormotBridgeDemo/ mORMot2 DI bridge both directions (needs local mormot2 checkout)
 demos/WaterfallDemo/ middleware pipeline: logging/auth-veto/rate-limit/handler
 demos/UiMarshalDemo/ background workers -> main-thread rendering via IUIInvoker
 demos/VclHostDemo/  **VCL plugin-manager GUI** - the Windows-app showcase:
@@ -118,7 +133,8 @@ docs/superpowers/  design spec + implementation plan
 **One click** (builds runtime packages + runs both test suites + builds all demos):
 
 ```bash
-build.cmd        # expect: ALL GREEN (44/44 + 6/6 tests, 32/32 Showroom selftest)
+build.cmd        # expect: ALL GREEN (75/75 + 6/6 + 32/32; mormot runner 8/8
+                 #  + bridge demo when mormot2 present, else SKIP)
 ```
 
 The Delphi 13 toolchain is used directly (`dcc32`). From the respective folder:
@@ -126,7 +142,7 @@ The Delphi 13 toolchain is used directly (`dcc32`). From the respective folder:
 ```bash
 # tests (DUnitX console runner) — from tests/
 dcc32 -B -U"<BDS>\source\DunitX" Oasis.Tests.dpr
-Oasis.Tests.exe            # expect: Tests Passed: 25, Failed: 0, Errored: 0
+Oasis.Tests.exe            # expect: Tests Passed: 75, Failed: 0, Errored: 0
 
 # demo — from demos/ConsoleDemo/
 dcc32 -B ConsoleDemo.dpr
@@ -231,6 +247,13 @@ finally
   Host.Free;
 end;
 ```
+
+## Breaking change (DI release)
+
+`IServiceRegistry` gained `RegisterFactory`/`RegisterTransient` and its
+`Has` became a pure existence check (never triggers a factory build); the
+interface GUID changed — **BPL plugins compiled against older Oasis.Core
+must be recompiled** (run `build.cmd`, it rebuilds everything).
 
 ## Lifetime note
 
