@@ -294,14 +294,21 @@ begin
   begin
     FLock.EnterWrite;
     try
-      { last-write-wins under concurrent first resolve (spec 4.3/F6). Memoize
-        only if OUR registration is still current (token match against the
-        FIRST read's token) - a newer overwrite must not be clobbered by an
-        older factory's late build. A losing build is released when LBuilt
-        goes out of scope. }
+      { Memoize only if OUR registration is still current (token match
+        against the FIRST read's token) - a newer overwrite must not be
+        clobbered by an older factory's late build. If the SAME registration
+        already carries a memo (a racing resolve won while we were building),
+        converge on the winner's instance instead of returning our duplicate
+        build - every caller of one registration sees one singleton. The
+        losing build is released when LBuilt goes out of scope. }
       if FMap.TryGetValue(AGUID, LNow) and (LNow.Token = LEntry.Token) then
-        FMap.AddOrSetValue(AGUID,
-          TServiceEntry.Make(LEntry.Kind, LEntry.Token, LBuilt, LEntry.Factory));
+      begin
+        if LNow.Instance = nil then
+          FMap.AddOrSetValue(AGUID,
+            TServiceEntry.Make(LEntry.Kind, LEntry.Token, LBuilt, LEntry.Factory))
+        else
+          LBuilt := LNow.Instance;
+      end;
     finally
       FLock.LeaveWrite;
     end;

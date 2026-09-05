@@ -129,7 +129,7 @@ var
   Ctx: IContext;
   List: TInterfaceResolverList;
   Bridge: TMormotServicesPlugin;
-  A, B: IInterface;
+  A, B: IMormotClock;
 begin
   TMormotClockImpl.Creates := 0;
   Ctx := TContext.Create('t');
@@ -140,8 +140,10 @@ begin
     再 Free 桥，顺序安全（brief 更正版，以此为准）。 }
   Bridge := TMormotServicesPlugin.Create(List, [TypeInfo(IMormotClock)], True);
   Bridge.Apply(Ctx);
-  A := Ctx.Services.Get(IMormotClock);
-  B := Ctx.Services.Get(IMormotClock);
+  A := Ctx.Services.Get(IMormotClock) as IMormotClock;
+  Assert.AreEqual(1, A.Tick);   { creation #1, observed through the mirror itself }
+  B := Ctx.Services.Get(IMormotClock) as IMormotClock;
+  Assert.AreEqual(2, B.Tick);   { per-resolve factory: every Get = a new instance }
   Assert.AreEqual(2, TMormotClockImpl.Creates);
   Assert.IsFalse(A = B);
   Ctx.Dispose;
