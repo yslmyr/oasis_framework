@@ -7,7 +7,7 @@
 interface
 
 uses
-  DUnitX.TestFramework, System.SysUtils,
+  DUnitX.TestFramework, System.SysUtils, System.Classes, System.SyncObjs,
   Oasis.Types, Oasis.Errors, Oasis.Services, Oasis.Inject, Oasis.Context,
   Oasis.Plugin, Oasis.Effects, Oasis.Loader, Oasis.Host;
 
@@ -207,6 +207,7 @@ type
     [Test] procedure Owner_Scope_Dispose_Releases_Factory_And_Memo;
     [Test] procedure Parent_Factory_Resolves_Through_Child;
     [Test] procedure Nil_Returning_Factory_Raises_FactoryError;
+    [Test] procedure Concurrent_First_Resolve_Converges_On_Winner_Memo;
   end;
 
   [TestFixture]
@@ -892,6 +893,65 @@ begin
     procedure var X: IInterface; begin X := R.Get(IGreetService); end,
     EOasisServiceFactoryError);
 end;
+
+procedure TFactoryTests.Concurrent_First_Resolve_Converges_On_Winner_Memo;
+var
+  R: IServiceRegistry;
+  EStarted, EResume: TEvent;
+  Worker: TThread;
+  MGet, WGet: IInterface;
+  Calls, I: Integer;
+begin
+  { Deterministic two-thread probe of the memoize race: the worker enters
+    build #1 and parks; the main thread resolves (build #2) and memoizes;
+    the worker resumes and must CONVERGE on the memoized winner instead of
+    returning its own duplicate build. Harness-proven patterns only: unnamed
+    manual-reset TEvents, FreeOnTerminate=False + explicit Free, join by
+    polling Finished (no TThread.WaitFor), TThread.Sleep. }
+  Calls := 0;
+  EStarted := TEvent.Create(nil, True, False, '');
+  EResume := TEvent.Create(nil, True, False, '');
+  try
+    R := TServiceRegistry.Create(nil);
+    R.RegisterFactory(IGreetService,
+      function: IInterface
+      begin
+        Inc(Calls);
+        if Calls = 1 then
+        begin
+          EStarted.SetEvent;
+          EResume.WaitFor(5000);
+        end;
+        Result := TGreetServiceImpl.Create;
+      end);
+    Worker := TThread.CreateAnonymousThread(
+      procedure
+      begin
+        WGet := R.Get(IGreetService);
+      end);
+    Worker.FreeOnTerminate := False;
+    Worker.Start;
+    Assert.AreEqual(Ord(wrSignaled), Ord(EStarted.WaitFor(5000)),
+      'worker never entered build #1');
+    MGet := R.Get(IGreetService);   { build #2 on the main thread, memoizes }
+    EResume.SetEvent;               { build #1 resumes: its write must converge }
+    for I := 1 to 1000 do
+    begin
+      if Worker.Finished then
+        Break;
+      TThread.Sleep(10);
+    end;
+    Assert.IsTrue(Worker.Finished, 'worker Get did not finish');
+    Assert.AreEqual(2, Calls);
+    Assert.IsTrue(MGet = WGet, 'racing resolves must converge on the single memo');
+    Worker.Free;
+  finally
+    EStarted.Free;
+    EResume.Free;
+  end;
+end;
+
+{ TTransientTests }
 
 procedure TTransientTests.Transient_Field_Holds_One_Instance_Per_Apply;
 var

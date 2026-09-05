@@ -541,6 +541,13 @@ mORMot2 大量单元级全局状态（`TInterfaceFactory` 注册表、日志、C
    闭包内抛」，实际（§3.3 草图与实现一致）提取发生在 `MountUnderFreshFiber`
    之前、异常从 `TContext.Plugin`/`THost.Mount` 直接抛出（不走 fsFailed）。
    实现与草图一致，风险表措辞以本条为准。
+6. **B.6 §4.3/F6 并发首次解析语义收紧**（合并后 Minor 加固）：原措辞为
+   「并发首次解析 last-write-wins（各自持有自己构建的实例）」。实现收紧为
+   **memo 收敛**：同一注册（token 一致）下，后完成构建的一方若发现对手已
+   落盘 memo，则放弃自身重复构建、返回胜者实例——单个注册的所有调用方看
+   到同一个单例。token 防覆写语义（新注册不被旧工厂的迟到构建覆盖）不变；
+   确定性双线程探针 `Concurrent_First_Resolve_Converges_On_Winner_Memo`
+   锁定该行为（收敛前 RED：两线程拿到不同实例）。
 
 **二轮审查（v3 修订依据）新增证据**：
 

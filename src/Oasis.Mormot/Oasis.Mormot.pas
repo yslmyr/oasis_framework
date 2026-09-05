@@ -50,7 +50,14 @@ type
   { Reverse bridge: expose the Oasis registry as a mORMot TInterfaceResolver,
     so mORMot-side DI graphs (TInjectableObject published properties,
     TInterfaceResolverInjected.InjectResolver composition) can consume
-    Oasis fiber-registered services. }
+    Oasis fiber-registered services.
+
+    Contract note: Implements maps to registry Has - a pure EXISTENCE probe
+    that never builds; TryResolve maps to Resolve, which builds factories and
+    propagates EOasisServiceFactoryError for a nil-returning or raising
+    factory. A registered-but-failing service can therefore answer
+    Implements=True while TryResolve does not succeed - existence is not
+    resolvability, callers must not treat Implements as a resolve guarantee. }
   TOasisResolver = class(TInterfaceResolver)
   strict private
     FRegistry: IServiceRegistry;
