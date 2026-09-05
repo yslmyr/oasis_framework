@@ -1,0 +1,20 @@
+﻿package SuiteDashboard;
+
+{$ALIGN 8}
+{$RUNONLY}
+
+(* Dashboard BPL module of the suite demo: one tab, [Inject]-ed dependencies
+  on the SuiteCore services. Mounted with
+  Host.Mount('bpl:SuiteDashboard.bpl;factory=TSuiteDashboardFactory'). *)
+
+requires
+  rtl,
+  vcl,
+  Oasis.Bpl,
+  SuiteContracts,
+  Oasis.Core;
+
+contains
+  SuiteDashboardMain;
+
+end.

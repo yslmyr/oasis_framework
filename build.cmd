@@ -25,15 +25,15 @@ mkdir "%BIN%"
 
 echo.
 echo [1/6] Building runtime packages...
-pushd "%CORE%" && "%DCC%" -B %NS% -U"%CORE%" -E"%BIN%" Oasis.Core.dpk   || goto :fail
+pushd "%CORE%" && "%DCC%" -B %NS% -U"%CORE%" -LE"%BIN%" -LN"%BIN%" Oasis.Core.dpk   || goto :fail
 popd
-pushd "%HOSTING%" && "%DCC%" -B %NS% -U"%CORE%" -U"%HOSTING%" -U"%BIN%" -E"%BIN%" Oasis.Hosting.dpk || goto :fail
+pushd "%HOSTING%" && "%DCC%" -B %NS% -U"%CORE%" -U"%HOSTING%" -U"%BIN%" -LE"%BIN%" -LN"%BIN%" Oasis.Hosting.dpk || goto :fail
 popd
-pushd "%OTLP%" && "%DCC%" -B %NS% -U"%CORE%" -U"%OTLP%" -U"%OTL%" -U"%OTL%\src" -U"%BIN%" -E"%BIN%" Oasis.Otl.dpk || goto :fail
+pushd "%OTLP%" && "%DCC%" -B %NS% -U"%CORE%" -U"%OTLP%" -U"%OTL%" -U"%OTL%\src" -U"%BIN%" -LE"%BIN%" -LN"%BIN%" Oasis.Otl.dpk || goto :fail
 popd
-pushd "%BPLP%" && "%DCC%" -B %NS% -U"%CORE%" -U"%HOSTING%" -U"%BPLP%" -U"%BIN%" -E"%BIN%" Oasis.Bpl.dpk || goto :fail
+pushd "%BPLP%" && "%DCC%" -B %NS% -U"%CORE%" -U"%HOSTING%" -U"%BPLP%" -U"%BIN%" -LE"%BIN%" -LN"%BIN%" Oasis.Bpl.dpk || goto :fail
 popd
-pushd "%UIP%" && "%DCC%" -B %NS% -U"%CORE%" -U"%UIP%" -U"%BIN%" -E"%BIN%" Oasis.UI.dpk || goto :fail
+pushd "%UIP%" && "%DCC%" -B %NS% -U"%CORE%" -U"%UIP%" -U"%BIN%" -LE"%BIN%" -LN"%BIN%" Oasis.UI.dpk || goto :fail
 popd
 
 echo [2/6] Building + running MVP test suite (Core + Hosting)...
@@ -81,6 +81,24 @@ pushd "%ROOT%demos\VclShowroom" && "%DCC%" -B %NS% -LUrtl -LUvcl Showroom.dpr ||
 Showroom.exe /selftest
 if errorlevel 1 goto :fail
 type vclshowroom_selftest.txt
+popd
+
+echo [+] Building BPL Suite demo (host exe + interface-oriented BPL modules) + selftest...
+set "SUITE=%ROOT%demos\BplSuiteDemo"
+pushd "%SUITE%\shared" && "%DCC%" -B %NS% -LE"%BIN%" -LN"%BIN%" SuiteContracts.dpk || goto :fail
+popd
+pushd "%SUITE%\modules\SuiteCore" && "%DCC%" -B %NS% -U"%CORE%" -U"%BPLP%" -U"%HOSTING%" -U"%BIN%" -U"%SUITE%\shared" -U. SuiteCore.dpk || goto :fail
+popd
+pushd "%SUITE%\modules\SuiteDashboard" && "%DCC%" -B %NS% -U"%CORE%" -U"%BPLP%" -U"%HOSTING%" -U"%BIN%" -U"%SUITE%\shared" -U. SuiteDashboard.dpk || goto :fail
+popd
+pushd "%SUITE%\modules\SuiteOrders" && "%DCC%" -B %NS% -U"%CORE%" -U"%BPLP%" -U"%HOSTING%" -U"%BIN%" -U"%SUITE%\shared" -U. SuiteOrders.dpk || goto :fail
+popd
+pushd "%SUITE%\host" && "%DCC%" -B %NS% -U"%CORE%" -U"%HOSTING%" -U"%BPLP%" -U"%BIN%" -LUrtl -LUvcl -LUOasis.Core -LUOasis.Hosting -LUOasis.Bpl SuiteHost.dpr || goto :fail
+rem rtl/vcl + the Oasis runtime packages must be findable when the host loads the modules
+set "PATH=%BIN%;C:\Program Files (x86)\Embarcadero\Studio\37.0\bin;%PATH%"
+SuiteHost.exe /selftest
+if errorlevel 1 goto :fail
+type bplsuite_selftest.txt
 popd
 
 set "MORMOT=D:\code\awesome-pascal\mormot2"

@@ -1,0 +1,20 @@
+﻿package SuiteOrders;
+
+{$ALIGN 8}
+{$RUNONLY}
+
+(* Orders BPL module of the suite demo: one tab + a transient ISuiteOrders
+  service. Mounted with
+  Host.Mount('bpl:SuiteOrders.bpl;factory=TSuiteOrdersFactory'). *)
+
+requires
+  rtl,
+  vcl,
+  Oasis.Bpl,
+  SuiteContracts,
+  Oasis.Core;
+
+contains
+  SuiteOrdersMain;
+
+end.

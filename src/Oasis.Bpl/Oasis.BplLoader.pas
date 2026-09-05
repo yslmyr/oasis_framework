@@ -63,22 +63,43 @@ end;
 
 function TBplPluginLoader.Load(const ASource: string): TPluginFactory;
 var
+  LPath, LFactoryName: string;
+  LSemi: Integer;
   LHandle: NativeUInt;
   LClass: TPersistentClass;
   LObj: TObject;
   LFact: IOasisPluginFactory;
   LEntry: TBplEntry;
 begin
-  LHandle := LoadPackage(ASource);   { runs the BPL initialization, which
-    RegisterClassAlias'es the factory into the shared (rtl.bpl) class list }
+  { source grammar: '<path-to-bpl>' or '<path>;factory=<ClassName>' - see the
+    multi-BPL protocol note in Oasis.BplContract. ';' is not a legal path char
+    on Windows, so the split is unambiguous. }
+  LSemi := Pos(';', ASource);
+  if LSemi > 0 then
+  begin
+    LPath := Copy(ASource, 1, LSemi - 1);
+    LFactoryName := Copy(ASource, LSemi + 1, MaxInt);
+    if not LFactoryName.StartsWith('factory=', True) then
+      raise EOasisLoaderError.CreateFmt(
+        'Malformed BPL source "%s" (only ";factory=<ClassName>" is supported after ";")',
+        [ASource]);
+    Delete(LFactoryName, 1, Length('factory='));
+  end
+  else
+  begin
+    LPath := ASource;
+    LFactoryName := OASIS_BPL_FACTORY_CLASS;
+  end;
+  LHandle := LoadPackage(LPath);   { runs the BPL initialization, which
+    registers the factory into the shared (rtl.bpl) class list }
   try
-    LClass := FindClass(OASIS_BPL_FACTORY_CLASS);
+    LClass := FindClass(LFactoryName);
   except
     on E: EClassNotFound do
     begin
       UnloadPackage(LHandle);
       raise EOasisLoaderError.CreateFmt('BPL "%s" does not register factory "%s"',
-        [ASource, OASIS_BPL_FACTORY_CLASS]);
+        [LPath, LFactoryName]);
     end;
   end;
   LObj := LClass.Create;   { TInterfacedPersistent; once we hold it via the
