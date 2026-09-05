@@ -51,6 +51,8 @@ type
   TNeedCfg = class(TOasisPlugin)
   public
     constructor Create;
+    { mounted only to prove it stays fsPending - Apply never runs }
+    procedure Apply(const Ctx: IContext); override;
   end;
 
   TSteady = class(TOasisPlugin)
@@ -65,6 +67,11 @@ constructor TNeedCfg.Create;
 begin
   inherited Create('needs-cfg');
   AddInject(IGreetCfg);
+end;
+
+procedure TNeedCfg.Apply(const Ctx: IContext);
+begin
+  { no-op - the plugin is dependency-starved by design and never activates }
 end;
 
 { TSteady }

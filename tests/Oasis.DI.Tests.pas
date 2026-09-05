@@ -57,6 +57,9 @@ type
     function HasDerived: Boolean;
   end;
 
+  { RTTI-only fixture fields: the injector writes them via TRttiField.Offset,
+    the compiler never sees a use - silence H2219 for this block. }
+  {$HINTS OFF}
   BadNonInterfaceField = class(TObject)
   strict private
     [Inject] FNotAnInterface: Integer;
@@ -78,11 +81,13 @@ type
     [Inject] FGreet: IGreetService;
   public
     constructor Create;
+    procedure Apply(const Ctx: IContext); override;   { probe-only, never mounted }
   end;
 
   ManualOnlyPlugin = class(TOasisPlugin)
   public
     constructor Create;
+    procedure Apply(const Ctx: IContext); override;   { probe-only, never mounted }
   end;
 
   { manual and field declare the SAME GUID: the union must dedupe to one }
@@ -91,7 +96,9 @@ type
     [Inject] FGreet: IGreetService;
   public
     constructor Create;
+    procedure Apply(const Ctx: IContext); override;   { probe-only, never mounted }
   end;
+  {$HINTS ON}
 
   { same-fiber cleanup-order probe: registers a user cleanup in its OWN Apply
     and records whether the [Inject] field is still populated at teardown }
@@ -361,16 +368,28 @@ begin
   AddInject(IOtherService);   { 手动一个 + 字段一个 }
 end;
 
+procedure MergePlugin.Apply(const Ctx: IContext);
+begin
+end;
+
 constructor ManualOnlyPlugin.Create;
 begin
   inherited Create('manual');
   AddInject(IGreetService);
 end;
 
+procedure ManualOnlyPlugin.Apply(const Ctx: IContext);
+begin
+end;
+
 constructor DupPlugin.Create;
 begin
   inherited Create('dup');
   AddInject(IGreetService);   { same GUID as the [Inject] field }
+end;
+
+procedure DupPlugin.Apply(const Ctx: IContext);
+begin
 end;
 
 constructor OrderProbePlugin.Create;
