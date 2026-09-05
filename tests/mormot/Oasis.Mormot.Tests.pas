@@ -60,6 +60,7 @@ type
     [Test] procedure OwnsResolver_True_Frees_Container;
     [Test] procedure OwnsResolver_False_Keeps_Container;
     [Test] procedure Reverse_Bridge_Resolves_Oasis_Service_Into_Mormot;
+    [Test] procedure Reverse_Bridge_Failure_Path_Returns_False;
   end;
 
 implementation
@@ -250,6 +251,32 @@ begin
     Inj.Free;
   end;
   Ctx.Dispose;
+end;
+
+procedure TMormotBridgeTests.Reverse_Bridge_Failure_Path_Returns_False;
+var
+  Ctx: IContext;
+  Res: TOasisResolver;
+  Obj: IInterface;
+begin
+  { 反向桥失败路径：未注册 GUID 必须干净地返回 False（不抛异常、
+    不留下半初始化的 out 参数）；注册后同一调用翻转为 True }
+  Ctx := TContext.Create('t');
+  try
+    Res := TOasisResolver.Create(Ctx.Services);
+    try
+      Assert.IsFalse(Res.Implements(TypeInfo(IMormotCalc)));
+      Assert.IsFalse(Res.TryResolve(TypeInfo(IMormotCalc), Obj));
+      Ctx.Services.Register(IMormotCalc, TMormotCalcImpl.Create);
+      Assert.IsTrue(Res.Implements(TypeInfo(IMormotCalc)));
+      Assert.IsTrue(Res.TryResolve(TypeInfo(IMormotCalc), Obj));
+      Assert.IsNotNull(Pointer(Obj));
+    finally
+      Res.Free;
+    end;
+  finally
+    Ctx.Dispose;
+  end;
 end;
 
 initialization
