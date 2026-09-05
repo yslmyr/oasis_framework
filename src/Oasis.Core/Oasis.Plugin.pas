@@ -26,7 +26,8 @@ type
   strict private
     FName: string;
     FInject: TArray<TGUID>;
-    FInjectMerged: TArray<TGUID>;   { lazy manual ∪ [Inject]-fields cache }
+    FInjectMerged: TArray<TGUID>;   { manual ∪ [Inject]-field GUIDs, built once }
+    FInjectComputed: Boolean;       { guards the one-time merge above }
   protected
     procedure AddInject(const AGUID: TGUID);
     property Name: string read FName write FName;
@@ -70,20 +71,34 @@ end;
 
 function TOasisPlugin.Inject: TArray<TGUID>;
 var
-  I, LN: Integer;
+  I, J: Integer;
   LFields: TArray<TGUID>;
+  LDup: Boolean;
 begin
-  if FInjectMerged = nil then
+  if not FInjectComputed then
   begin
-    { 手动 AddInject（仅构造期）∪ [Inject] 字段（扫描缓存）。合并结果缓存：
-      DepsSatisfied 每次服务注册都会对每个插件调 Inject（spec 3.3/N3）。 }
+    { manual AddInject (constructor-time) ∪ [Inject] fields (scan cache),
+      deduplicated by GUID. Built once: DepsSatisfied calls Inject on every
+      plugin at every service registration (spec 3.3/N3), so zero-dependency
+      plugins must not re-enter this branch either. }
     LFields := TOasisInjector.FieldGuids(ClassType);
-    LN := Length(FInject);
-    SetLength(FInjectMerged, LN + Length(LFields));
-    for I := 0 to LN - 1 do
-      FInjectMerged[I] := FInject[I];
-    for I := 0 to Length(LFields) - 1 do
-      FInjectMerged[LN + I] := LFields[I];
+    FInjectMerged := Copy(FInject, 0, Length(FInject));
+    for I := 0 to High(LFields) do
+    begin
+      LDup := False;
+      for J := 0 to High(FInjectMerged) do
+        if IsEqualGUID(FInjectMerged[J], LFields[I]) then
+        begin
+          LDup := True;
+          Break;
+        end;
+      if not LDup then
+      begin
+        SetLength(FInjectMerged, Length(FInjectMerged) + 1);
+        FInjectMerged[High(FInjectMerged)] := LFields[I];
+      end;
+    end;
+    FInjectComputed := True;
   end;
   Result := FInjectMerged;
 end;

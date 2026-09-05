@@ -85,6 +85,14 @@ type
     constructor Create;
   end;
 
+  { manual and field declare the SAME GUID: the union must dedupe to one }
+  DupPlugin = class(TOasisPlugin)
+  strict private
+    [Inject] FGreet: IGreetService;
+  public
+    constructor Create;
+  end;
+
   { Task 3: context-hook fixtures (populate-before-Apply, clear-on-teardown). }
   FieldConsumerPlugin = class(TOasisPlugin)
   strict private
@@ -166,6 +174,7 @@ type
   public
     [Test] procedure Inject_Merges_Manual_And_Field_Guids;
     [Test] procedure Inject_Result_Is_Cached_And_Stable;
+    [Test] procedure Inject_Dedupes_Manual_And_Field_Same_Guid;
   end;
 
   [TestFixture]
@@ -346,6 +355,12 @@ begin
   AddInject(IGreetService);
 end;
 
+constructor DupPlugin.Create;
+begin
+  inherited Create('dup');
+  AddInject(IGreetService);   { same GUID as the [Inject] field }
+end;
+
 { TDeclarationMergeTests }
 
 procedure TDeclarationMergeTests.Inject_Merges_Manual_And_Field_Guids;
@@ -380,6 +395,23 @@ begin
   try
     { 两次调用返回同一缓存数组引用（动态数组指针比较） }
     Assert.IsTrue(Pointer(P.Inject) = Pointer(P.Inject));
+  finally
+    P.Free;
+  end;
+end;
+
+procedure TDeclarationMergeTests.Inject_Dedupes_Manual_And_Field_Same_Guid;
+var
+  P: DupPlugin;
+  Guids: TArray<TGUID>;
+begin
+  P := DupPlugin.Create;
+  try
+    Guids := P.Inject;
+    Assert.AreEqual(1, Length(Guids));
+    Assert.IsTrue(IsEqualGUID(Guids[0], IGreetService));
+    { 缓存语义不变：二次调用同一数组引用 }
+    Assert.IsTrue(Pointer(Guids) = Pointer(P.Inject));
   finally
     P.Free;
   end;
