@@ -73,7 +73,11 @@ bpldemo_out.txt
 vclhost_selftest.txt
 vclhost_probe.txt
 vclshowroom_selftest.txt
+bplsuite_selftest.txt
 showroom.json
+
+# --- local tool artifacts ---
+.mimosa/
 
 # --- OmniThreadLibrary / third-party pulled libs (uncomment if vendored build output) ---
 # thirdparty/**/bin/
